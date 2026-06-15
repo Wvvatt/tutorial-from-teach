@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 1: V4L2 架构与 Two-Queue 模型</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --text: #222;
+    --bg: #faf9f7;
+    --accent: #1a5276;
+    --accent-light: #2980b9;
+    --code-bg: #f0ede8;
+    --border: #ddd;
+    --success: #27ae60;
+    --error: #c0392b;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', 'Fira Code', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    font-weight: 350;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 1.5rem;
+  }
+
+  header .lesson-num {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header .subtitle {
+    font-size: 0.95rem;
+    color: #555;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 2rem 0 0.75rem 0;
+    padding-top: 1rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--accent-light);
+    margin: 1.5rem 0 0.5rem 0;
+  }
+
+  p {
+    margin-bottom: 1rem;
+  }
+
+  a {
+    color: var(--accent-light);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  a:hover {
+    border-bottom-color: var(--accent-light);
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.5;
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  blockquote {
+    border-left: 3px solid var(--accent-light);
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    background: rgba(41, 128, 185, 0.06);
+    border-radius: 0 4px 4px 0;
+  }
+
+  blockquote p { margin-bottom: 0; }
+
+  .diagram {
+    text-align: center;
+    margin: 1.5rem 0;
+    padding: 1.5rem;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+  }
+
+  .diagram .arrow { color: var(--accent-light); }
+  .diagram .label { color: #555; font-size: 0.75rem; }
+  .diagram .highlight { color: var(--accent); font-weight: 500; }
+
+  .info-box {
+    background: #eaf2f8;
+    border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .info-box strong { color: var(--accent); }
+
+  .quiz {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .quiz p.quiz-q {
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .quiz .option {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    font-size: 0.92rem;
+  }
+
+  .quiz .option:hover {
+    background: #f5f3ef;
+  }
+
+  .quiz .option.selected {
+    border-color: var(--accent-light);
+    background: #eaf2f8;
+  }
+
+  .quiz .option.correct {
+    border-color: var(--success);
+    background: #eafaf1;
+  }
+
+  .quiz .option.wrong {
+    border-color: var(--error);
+    background: #fdedec;
+  }
+
+  .quiz .feedback {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    display: none;
+  }
+
+  .quiz .feedback.show { display: block; }
+  .quiz .feedback.correct { background: #eafaf1; color: #1e8449; }
+  .quiz .feedback.wrong { background: #fdedec; color: #922b21; }
+
+  .next-steps {
+    background: #f8f5f0;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 2rem 0 1rem 0;
+  }
+
+  .next-steps h3 {
+    margin-top: 0;
+  }
+
+  .next-steps ul {
+    margin: 0.5rem 0 0 1.2rem;
+  }
+
+  .next-steps li {
+    margin-bottom: 0.35rem;
+  }
+
+  .ref-link {
+    font-size: 0.85rem;
+    color: #777;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2rem 0;
+  }
+
+  footer {
+    text-align: center;
+    font-size: 0.82rem;
+    color: #999;
+    margin: 2rem 0;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="lesson-num">Lesson 1 / 4 课时</div>
+  <h1>V4L2 架构与 Two-Queue 模型</h1>
+  <p class="subtitle">理解 V4L2 decoder 的骨架——两个队列、四种 buffer 模式、以及 decoder 在其中的定位。</p>
+</header>
+
+<section>
+  <h2>1. V4L2 是什么</h2>
+  <p><strong>Video for Linux 2 (V4L2)</strong> 是 Linux 内核中视频设备的用户空间 API 规范与驱动框架。它统一了以下设备的编程接口：</p>
+  <ul>
+    <li>📷 摄像头（Video Capture）</li>
+    <li>🖥️ 视频输出（Video Output）</li>
+    <li>🎬 视频编解码器（Memory-to-Memory Codec）—— <strong>你的关注点</strong></li>
+    <li>📻 Radio / SDR</li>
+    <li>✋ VBI / Touch / Metadata</li>
+  </ul>
+  <p>V4L2 设备节点通常为 <code>/dev/videoN</code>（如 <code>/dev/video0</code>），通过标准的 <code>open</code> / <code>close</code> / <code>ioctl</code> 系统调用进行控制。</p>
+  <p class="ref-link">→ 见 <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/open.html">V4L2 设备节点命名规则</a></p>
+</section>
+
+<section>
+  <h2>2. Two-Queue 模型——V4L2 的基石</h2>
+  <p>对于 memory-to-memory 设备（decoder / encoder），V4L2 的核心抽象是 <strong>两个独立的 buffer 队列</strong>：</p>
+
+  <div class="diagram">
+    <span class="highlight">OUTPUT Queue</span>  ──────────────────────────►  <span class="highlight">CAPTURE Queue</span><br>
+    <span class="label">用户填入编码码流</span>                         <span class="label">从硬件读出解码帧</span><br>
+    <span class="label">V4L2_BUF_TYPE_VIDEO_OUTPUT</span>             <span class="label">V4L2_BUF_TYPE_VIDEO_CAPTURE</span><br>
+    <br>
+    ┌───────────────────────────────────────────────────────┐<br>
+    │                    Decoder 硬件/驱动                    │<br>
+    │  OUTPUT: 编码码流 in → [H.264/HEVC/VP9...] → 原始帧 out : CAPTURE │<br>
+    └───────────────────────────────────────────────────────┘
+  </div>
+
+  <table style="width:100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.92rem;">
+    <tr style="border-bottom: 2px solid var(--accent);">
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">&nbsp;</th>
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">OUTPUT (Source)</th>
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">CAPTURE (Destination)</th>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">对 decoder</td>
+      <td style="padding: 0.5rem 0.75rem;">编码码流（如 H.264 ES）</td>
+      <td style="padding: 0.5rem 0.75rem;">解码后原始帧（如 NV12）</td>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">Buffer 类型</td>
+      <td style="padding: 0.5rem 0.75rem;"><code>VIDEO_OUTPUT</code> / <code>_MPLANE</code></td>
+      <td style="padding: 0.5rem 0.75rem;"><code>VIDEO_CAPTURE</code> / <code>_MPLANE</code></td>
+    </tr>
+    <tr>
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">数据方向</td>
+      <td style="padding: 0.5rem 0.75rem;">用户 → 驱动</td>
+      <td style="padding: 0.5rem 0.75rem;">驱动 → 用户</td>
+    </tr>
+  </table>
+
+  <div class="info-box">
+    <strong>关键洞察：</strong>OUTPUT 和 CAPTURE 两个 queue <em>独立运行</em>。一个 OUTPUT buffer 可能产生 0 个、1 个或多个 CAPTURE buffer（取决于帧重排、帧类型等）。
+  </div>
+</section>
+
+<section>
+  <h2>3. 基本 I/O 生命周期</h2>
+  <p>无论 stateful 还是 stateless，所有 V4L2 decoder 都遵循以下基本步骤：</p>
+
+  <pre><code>1. open("/dev/videoN")
+2. VIDIOC_QUERYCAP        // 查询设备能力
+3. VIDIOC_S_FMT(OUTPUT)   // 设置编码格式
+4. VIDIOC_REQBUFS(OUTPUT) // 分配 OUTPUT buffer
+5. VIDIOC_STREAMON(OUTPUT) // 启动 OUTPUT 队列
+6. VIDIOC_G_FMT(CAPTURE)  // 获取解码帧格式
+7. VIDIOC_REQBUFS(CAPTURE)// 分配 CAPTURE buffer
+8. VIDIOC_STREAMON(CAPTURE)// 启动 CAPTURE 队列
+   ——— 解码循环 ———
+9.   VIDIOC_QBUF(OUTPUT)  // 送入码流
+10.  VIDIOC_DQBUF(CAPTURE)// 取出解码帧
+   ——— 结束 ———
+11. VIDIOC_STREAMOFF(both)
+12. close(fd)</code></pre>
+
+  <p>这个流程在 <strong>stateful decoder</strong> 中基本如此；<strong>stateless decoder</strong> 则在此基础上增加了 Request API 来提交解码参数（见后续课程）。</p>
+</section>
+
+<section>
+  <h2>4. Stateful vs Stateless —— 最根本的区别</h2>
+  <p>工作中接触到 decoder 时，第一件事就是分清你面对的是 <strong>stateful</strong> 还是 <strong>stateless</strong> 接口。它们的核心差异：</p>
+
+  <table style="width:100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.92rem;">
+    <tr style="border-bottom: 2px solid var(--accent);">
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">维度</th>
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">Stateful Decoder</th>
+      <th style="text-align: left; padding: 0.5rem 0.75rem;">Stateless Decoder</th>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">谁维护解码状态</td>
+      <td style="padding: 0.5rem 0.75rem;">驱动/硬件</td>
+      <td style="padding: 0.5rem 0.75rem;">用户空间</td>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">输入</td>
+      <td style="padding: 0.5rem 0.75rem;">完整码流（Annex-B / raw stream）</td>
+      <td style="padding: 0.5rem 0.75rem;">每帧码流 + 完整的解码参数（SPS/PPS/参考帧列表等）</td>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">使用 Request API</td>
+      <td style="padding: 0.5rem 0.75rem;">否</td>
+      <td style="padding: 0.5rem 0.75rem;">是（通过 <code>MEDIA_REQUEST_IOC_QUEUE</code>）</td>
+    </tr>
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">状态机复杂度</td>
+      <td style="padding: 0.5rem 0.75rem;">复杂（初始化→解码→DRC→drain→seek）</td>
+      <td style="padding: 0.5rem 0.75rem;">简单（每帧独立提交）</td>
+    </tr>
+    <tr>
+      <td style="padding: 0.5rem 0.75rem; font-weight: 500;">典型硬件</td>
+      <td style="padding: 0.5rem 0.75rem;">传统 ASIC decoder</td>
+      <td style="padding: 0.5rem 0.75rem;">现代 GPU/VPU（如 Qualcomm venus, Rockchip vdec）</td>
+    </tr>
+  </table>
+
+  <div class="info-box">
+    <strong>何时用哪个？</strong>如果硬件内部有完整的解码管道（parser + DPB 管理），用 stateful 接口。如果硬件只做纯粹的熵解码/MC，解码状态管理交给用户空间，用 stateless 接口 + Request API。
+  </div>
+</section>
+
+<section>
+  <h2>5. Buffer 的四种内存模式</h2>
+  <p>V4L2 定义了四种 buffer 内存管理模式，选择哪一种取决于系统架构和性能需求：</p>
+  <ul>
+    <li><strong><code>V4L2_MEMORY_MMAP</code></strong>：驱动分配内存，用户通过 <code>mmap</code> 映射访问。最常用，性能好。</li>
+    <li><strong><code>V4L2_MEMORY_USERPTR</code></strong>：用户分配内存，驱动通过指针访问。适合已有 buffer pool 的应用。</li>
+    <li><strong><code>V4L2_MEMORY_DMABUF</code></strong>：通过 dma-buf fd 共享 buffer。零拷贝路径（decoder → display）。</li>
+    <li><strong><code>V4L2_MEMORY_OVERLAY</code></strong>：直接将视频覆盖到 framebuffer（已废弃）。</li>
+  </ul>
+  <p>对于 decoder，<code>CAPTURE</code> 队列通常使用 <code>MMAP</code> 或 <code>DMABUF</code>（后者用于零拷贝显示流水线）。</p>
+</section>
+
+<section>
+  <h2>6. 小测验</h2>
+
+  <div class="quiz" id="quiz1">
+    <p class="quiz-q">1. V4L2 decoder 中，OUTPUT queue 传输的是什么类型的数据？</p>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz1')">A. 编码码流（如 H.264 bytestream）</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz1')">B. 解码后的 YUV 帧</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz1')">C. RGB 像素数据</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz1')">D. 音频 PCM 数据</div>
+    <div class="feedback" id="fb1"></div>
+  </div>
+
+  <div class="quiz" id="quiz2">
+    <p class="quiz-q">2. Stateless decoder 区别于 stateful decoder 的关键特征是什么？</p>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz2')">A. 不需要分配 CAPTURE buffer</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz2')">B. 解码速度比 stateful 快</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz2')">C. 解码状态由用户空间维护，使用 Request API</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz2')">D. 只支持 JPEG 解码</div>
+    <div class="feedback" id="fb2"></div>
+  </div>
+
+  <div class="quiz" id="quiz3">
+    <p class="quiz-q">3. 以下哪个 ioctl 用于将 buffer 交给驱动处理？</p>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz3')">A. VIDIOC_REQBUFS</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz3')">B. VIDIOC_DQBUF</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz3')">C. VIDIOC_QBUF</div>
+    <div class="option" data-answer="" onclick="checkAnswer(this, 'quiz3')">D. VIDIOC_STREAMON</div>
+    <div class="feedback" id="fb3"></div>
+  </div>
+</section>
+
+<section>
+  <h2>7. 动手：查找系统中的 V4L2 设备</h2>
+  <p>即使你在 macOS 上没有真实的 V4L2 硬件，你仍然可以了解 V4L2 设备节点在 Linux 上长什么样：</p>
+
+  <pre><code># 在 Linux 上查看所有 V4L2 设备
+ls -la /dev/video*
+
+# 查看设备能力
+v4l2-ctl --device=/dev/video0 --all
+
+# 枚举 decoder 支持的格式
+v4l2-ctl --device=/dev/video0 --list-formats
+v4l2-ctl --device=/dev/video0 --list-formats-out</code></pre>
+
+  <p>如果需要在 macOS 上实验，可以考虑：</p>
+  <ul>
+    <li>使用 <a href="https://www.qemu.org/">QEMU</a> 模拟 Linux 环境</li>
+    <li>加载 <strong>vivid</strong> 虚拟测试驱动（<code>modprobe vivid</code>）</li>
+  </ul>
+</section>
+
+<hr>
+
+<section class="next-steps">
+  <h3>📚 下一步</h3>
+  <ul>
+    <li>阅读 <a href="GLOSSARY.md">V4L2 Glossary</a> 熟悉术语</li>
+    <li>深入学习内核文档：<a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-decoder.html">Stateful Decoder Interface</a></li>
+    <li>对比学习：<a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-stateless-decoder.html">Stateless Decoder Interface</a></li>
+  </ul>
+
+  <h3 style="margin-top: 1rem;">💬 有问题？</h3>
+  <p>随时问我！V4L2 是非常复杂的子系统，任何不清楚的地方都可以深入探讨。如果涉及真实的硬件调试或社区实践，建议参与 <a href="https://linuxtv.org/lists.php">linux-media 邮件列表</a>。</p>
+</section>
+
+<footer>
+  Lesson 1 of the V4L2 Learning Track — <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/v4l2.html">Primary Source: Linux Kernel V4L2 API Docs</a>
+</footer>
+
+</div>
+
+<script>
+function checkAnswer(el, quizId) {
+  var quiz = document.getElementById(quizId);
+  var options = quiz.querySelectorAll('.option');
+  var feedback = quiz.querySelector('.feedback');
+
+  // Disable all options
+  options.forEach(function(opt) {
+    opt.onclick = null;
+    opt.style.cursor = 'default';
+  });
+
+  // Highlight selection
+  var isCorrect = el.getAttribute('data-answer') === 'correct';
+  options.forEach(function(opt) {
+    if (opt === el) {
+      opt.classList.add(isCorrect ? 'correct' : 'wrong');
+      opt.classList.add('selected');
+    } else if (opt.getAttribute('data-answer') === 'correct') {
+      opt.classList.add('correct');
+    }
+  });
+
+  // Show feedback
+  feedback.classList.add('show');
+  feedback.classList.add(isCorrect ? 'correct' : 'wrong');
+  feedback.textContent = isCorrect
+    ? '✓ 正确！'
+    : '✗ 再想想看。可以回顾上面的内容。';
+}
+</script>
+
+</body>
+</html>
