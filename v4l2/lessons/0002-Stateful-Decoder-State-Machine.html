@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 2: Stateful Decoder 状态机详解</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --text: #222;
+    --bg: #faf9f7;
+    --accent: #1a5276;
+    --accent-light: #2980b9;
+    --code-bg: #f0ede8;
+    --border: #ddd;
+    --success: #27ae60;
+    --error: #c0392b;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', 'Fira Code', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    font-weight: 350;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 1.5rem;
+  }
+
+  header .lesson-num {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header .subtitle {
+    font-size: 0.95rem;
+    color: #555;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 2rem 0 0.75rem 0;
+    padding-top: 1rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--accent-light);
+    margin: 1.5rem 0 0.5rem 0;
+  }
+
+  p {
+    margin-bottom: 1rem;
+  }
+
+  a {
+    color: var(--accent-light);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  a:hover { border-bottom-color: var(--accent-light); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.5;
+  }
+
+  pre code { background: none; padding: 0; border-radius: 0; }
+
+  blockquote {
+    border-left: 3px solid var(--accent-light);
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    background: rgba(41, 128, 185, 0.06);
+    border-radius: 0 4px 4px 0;
+  }
+
+  blockquote p { margin-bottom: 0; }
+
+  .state-diagram {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  .state-diagram .state {
+    display: inline-block;
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.4rem 0.8rem;
+    margin: 0.2rem;
+    font-weight: 500;
+    background: #eaf2f8;
+    color: var(--accent);
+    font-size: 0.82rem;
+  }
+
+  .state-diagram .state.current {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .state-diagram .arrow {
+    display: inline-block;
+    color: #888;
+    margin: 0 0.3rem;
+    font-size: 1.1rem;
+  }
+
+  .state-diagram .arrow-label {
+    display: block;
+    font-size: 0.65rem;
+    color: #888;
+    margin-top: -0.2rem;
+  }
+
+  .info-box {
+    background: #eaf2f8;
+    border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .info-box strong { color: var(--accent); }
+
+  .warn-box {
+    background: #fef9e7;
+    border-left: 3px solid #f39c12;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .step-list {
+    list-style: none;
+    counter-reset: step-counter;
+    margin: 1rem 0;
+  }
+
+  .step-list li {
+    counter-increment: step-counter;
+    padding: 0.6rem 0 0.6rem 2.5rem;
+    position: relative;
+    border-bottom: 1px solid #f0ede8;
+  }
+
+  .step-list li::before {
+    content: counter(step-counter);
+    position: absolute;
+    left: 0;
+    top: 0.6rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+  }
+
+  .step-list li strong { color: var(--accent); }
+
+  .step-list li code { font-size: 0.82em; }
+
+  .quiz {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .quiz p.quiz-q {
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .quiz .option {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    font-size: 0.92rem;
+  }
+
+  .quiz .option:hover { background: #f5f3ef; }
+  .quiz .option.selected { border-color: var(--accent-light); background: #eaf2f8; }
+  .quiz .option.correct { border-color: var(--success); background: #eafaf1; }
+  .quiz .option.wrong { border-color: var(--error); background: #fdedec; }
+
+  .quiz .feedback {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    display: none;
+  }
+
+  .quiz .feedback.show { display: block; }
+  .quiz .feedback.correct { background: #eafaf1; color: #1e8449; }
+  .quiz .feedback.wrong { background: #fdedec; color: #922b21; }
+
+  .key-point {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 1rem 0;
+  }
+
+  .key-point .icon { font-size: 1.2rem; line-height: 1.4; }
+
+  .next-steps {
+    background: #f8f5f0;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 2rem 0 1rem 0;
+  }
+
+  .next-steps h3 { margin-top: 0; }
+  .next-steps ul { margin: 0.5rem 0 0 1.2rem; }
+  .next-steps li { margin-bottom: 0.35rem; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2rem 0;
+  }
+
+  footer {
+    text-align: center;
+    font-size: 0.82rem;
+    color: #999;
+    margin: 2rem 0;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.92rem;
+  }
+
+  td, th {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    border-bottom: 2px solid var(--accent);
+    font-weight: 500;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="lesson-num">Lesson 2 / 4 课时</div>
+  <h1>Stateful Decoder 状态机详解</h1>
+  <p class="subtitle">从初始化到 Drain——理解 stateful V4L2 decoder 的完整生命周期。</p>
+</header>
+
+<section>
+  <h2>1. 状态机全景图</h2>
+
+  <p>Stateful decoder 在 <a href="GLOSSARY.md">GLOSSARY</a> 中的定义是：<em>由驱动/硬件维护解码状态（DPB、参考帧列表等），用户只需送入完整码流，按 display order 取出解码帧</em>。它的行为由一个 <strong>状态机</strong> 精确控制。</p>
+
+  <div class="state-diagram">
+    <div><span class="state">UNINIT</span></div>
+    <div><span class="arrow">↓</span> <span class="arrow-label">S_FMT(OUTPUT) + REQBUFS + STREAMON</span></div>
+    <div><span class="state">INIT</span></div>
+    <div><span class="arrow">↓</span> <span class="arrow-label">解析到流分辨率 → SOURCE_CHANGE 事件</span></div>
+    <div><span class="state">CAPTURE_SETUP</span></div>
+    <div><span class="arrow">↓</span> <span class="arrow-label">G_FMT + REQBUFS + STREAMON(CAPTURE)</span></div>
+    <div><span class="state">DECODING</span></div>
+    <div><span class="arrow">↕</span> <span class="arrow-label">QBUF / DQBUF 循环</span></div>
+    <div style="display: flex; justify-content: center; gap: 1rem; margin-top: 0.5rem;">
+      <div><span class="arrow">┌─────────────────┤</span><br><span class="arrow-label">DRC/源改变</span></div>
+      <div><span class="arrow">├─────────────────┐</span><br><span class="arrow-label">Drain/Flush</span></div>
+      <div><span class="arrow">├──────────┐</span><br><span class="arrow-label">EOS</span></div>
+    </div>
+    <div style="display: flex; justify-content: center; gap: 1rem;">
+      <div><span class="state">DRC</span> → CAPTURE_SETUP</div>
+      <div><span class="state">DRAIN</span> → DECODING</div>
+      <div><span class="state">EOS</span> → (停止)</div>
+    </div>
+  </div>
+
+  <p class="ref-link">→ 基于内核 <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-decoder.html#state-machine">Stateful Decoder 文档</a> 中的 DOT 状态图</p>
+
+  <div class="info-box">
+    <strong>核心原则：</strong>OUTPUT queue 是"主人"——先设置 OUTPUT 格式，CAPTURE 格式由此衍生。在 buffer 已分配时不能更改 OUTPUT 格式（返回 <code>-EBUSY</code>）。
+  </div>
+</section>
+
+<section>
+  <h2>2. 阶段一：初始化（UNINIT → INIT → CAPTURE_SETUP）</h2>
+  <p>Decoder 从无到有的过程分为几步，每一步都有精确的 ioctl 序列：</p>
+
+  <h3>2.1 设置 OUTPUT 格式</h3>
+  <pre><code>struct v4l2_format fmt = {
+    .type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+    .fmt.pix_mp = {
+        .width        = 1920,
+        .height       = 1088,       // coded resolution（宏块对齐）
+        .pixelformat  = V4L2_PIX_FMT_H264,  // 编码格式
+        .sizeimage    = 1024 * 1024,         // OUTPUT buffer 大小
+    },
+};
+ioctl(fd, VIDIOC_S_FMT, &fmt);</code></pre>
+
+  <p>调用 <code>VIDIOC_S_FMT(OUTPUT)</code> 后，驱动会：</p>
+  <ul>
+    <li>根据你设置的 coded format 更新 <code>sizeimage</code> 等字段</li>
+    <li>初步推算 CAPTURE 格式（但还不是真实分辨率）</li>
+    <li>如果码流自带分辨率信息，<strong>真正的 CAPTURE 格式要等解析到流之后才确定</strong></li>
+  </ul>
+
+  <h3>2.2 分配 OUTPUT buffer 并启动</h3>
+  <pre><code>struct v4l2_requestbuffers req = {
+    .count  = 4,
+    .type   = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+    .memory = V4L2_MEMORY_MMAP,
+};
+ioctl(fd, VIDIOC_REQBUFS, &req);      // 分配 4 个 OUTPUT buffer
+ioctl(fd, VIDIOC_STREAMON, &req.type);  // 启动 OUTPUT 队列</code></pre>
+
+  <h3>2.3 送入码流直到解析到分辨率</h3>
+  <p>对于自带分辨率信息的码流（如 H.264），你需要：</p>
+  <ul>
+    <li>QBUF 送入码流数据 → 驱动解析 SPS/PPS/IDR</li>
+    <li>驱动解析出真实分辨率后，发出 <code>V4L2_EVENT_SOURCE_CHANGE</code> 事件（<code>V4L2_EVENT_SRC_CH_RESOLUTION</code>）</li>
+    <li>收到该事件前，<code>G_FMT(CAPTURE)</code> 返回的可能是占位值</li>
+  </ul>
+
+  <div class="info-box">
+    <strong>关键细节：</strong>在 INIT 阶段送入码流但还没解析到分辨率时，已送入的 buffer 不会返回 decoded frame——因为还没配置 CAPTURE queue。"no decoded frames are produced during this phase"（内核文档原话）。
+  </div>
+</section>
+
+<section>
+  <h2>3. 阶段二：解码（DECODING）</h2>
+
+  <p>CAPTURE queue 配置完成后，进入正常的解码循环。但 OUTPUT 和 CAPTURE 的关系 <strong>不是</strong> 一一对应的：</p>
+
+  <div class="key-point">
+    <div class="icon">⚠️</div>
+    <div>
+      <strong>一个 OUTPUT buffer 可能产生 0、1 或多个 CAPTURE buffer。</strong><br>
+      <span style="font-size: 0.9rem;">
+        • 只有元数据的 buffer → 0 个 CAPTURE<br>
+        • 包含一帧数据 → 1 个 CAPTURE（最常见）<br>
+        • 包含多帧数据 → 多个 CAPTURE<br>
+        • 帧重排 → CAPTURE 的 <strong>display order</strong> ≠ OUTPUT 的 <strong>decode order</strong>
+      </span>
+    </div>
+  </div>
+
+  <p>为了匹配 OUTPUT 和 CAPTURE buffer，使用 <strong>timestamp</strong> 字段：</p>
+  <pre><code>// QBUF 时设置 timestamp
+struct v4l2_buffer buf = {
+    .type      = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+    .index     = 0,
+    .timestamp = { .tv_sec = seq, .tv_usec = 0 },  // 用户自定义
+};
+ioctl(fd, VIDIOC_QBUF, &buf);
+
+// DQBUF 时 CAPTURE buffer 的 timestamp 会被设成它来源的 OUTPUT buffer 的值
+ioctl(fd, VIDIOC_DQBUF, &capture_buf);
+// capture_buf.timestamp == 对应 OUTPUT 的 timestamp</code></pre>
+
+  <div class="warn-box">
+    <strong>⚠️ 关于 reference frame buffer 的重要警告：</strong><br>
+    被用作参考帧的 CAPTURE buffer 的内存 <strong>即使被 DQBUF 后，硬件仍然可能在读取它</strong>。在 CAPTURE streaming 期间不要写入已 dequeue 的 CAPTURE buffer 内存，否则会导致后续帧解码错误。
+  </div>
+</section>
+
+<section>
+  <h2>4. 阶段三：Seek（跳转）</h2>
+
+  <p>Seek 由 <strong>OUTPUT queue 控制</strong>：</p>
+
+  <ol class="step-list">
+    <li><strong>STREAMOFF(OUTPUT)</strong> — 停止 OUTPUT，所有 pending 的 OUTPUT buffer 被丢弃并返回</li>
+    <li><strong>STREAMON(OUTPUT)</strong> — 重新启动 OUTPUT，开始接受新数据</li>
+    <li><strong>QBUF 新位置的码流</strong> — 驱动会自动寻找 resume point（关键帧 / SPS/PPS/IDR）</li>
+    <li>找到 resume point 后，开始产生解码帧</li>
+  </ol>
+
+  <div class="info-box">
+    <strong>注意：</strong>STREAMOFF 后，CAPTURE queue 可能还残留之前解码的帧。如果你想要"瞬时 seek"，可以对 CAPTURE 也做 STREAMOFF/STREAMON 来丢弃它们。
+  </div>
+</section>
+
+<section>
+  <h2>5. 阶段四：Dynamic Resolution Change（DRC）</h2>
+
+  <p>如果码流中分辨率发生变化（这在自适应流中很常见），decoder 会触发 DRC 序列。注意：不是所有 decoder 都支持 DRC——需要在 <code>ENUM_FMT</code> 时检查 <code>V4L2_FMT_FLAG_DYN_RESOLUTION</code> 标志。</p>
+
+  <p>DRC 的触发条件（内核文档列出）：</p>
+  <ul>
+    <li>coded resolution 变化</li>
+    <li>visible resolution 变化</li>
+    <li>所需最小 buffer 数量变化</li>
+    <li>bit-depth 变化</li>
+    <li>colorspace 变化</li>
+  </ul>
+
+  <p>DRC 的处理流程：</p>
+
+  <ol class="step-list">
+    <li><strong>驱动发出 <code>V4L2_EVENT_SOURCE_CHANGE</code></strong>（<code>V4L2_EVENT_SRC_CH_RESOLUTION</code>）</li>
+    <li><strong>驱动解码完所有变化前的帧</strong> — 最后一个 CAPTURE buffer 标记 <code>V4L2_BUF_FLAG_LAST</code></li>
+    <li><strong>再次执行 CAPTURE_SETUP</strong> — G_FMT → (可选 REQBUFS) → STREAMON</li>
+    <li>恢复解码</li>
+  </ol>
+
+  <div class="warn-box">
+    <strong>重要：</strong>DRC 期间 OUTPUT queue 必须保持 streaming！如果对 OUTPUT 做 STREAMOFF，就会触发 seek 而不是 DRC。
+  </div>
+</section>
+
+<section>
+  <h2>6. 阶段五：Drain（排空）</h2>
+
+  <p>当你想确保所有已送入的码流都被完全解码（比如切换码流/关闭前），需要 drain decoder：</p>
+
+  <ol class="step-list">
+    <li><strong>发送 <code>V4L2_DEC_CMD_STOP</code></strong> — <code>ioctl(fd, VIDIOC_DECODER_CMD, &(struct v4l2_decoder_cmd){.cmd = V4L2_DEC_CMD_STOP})</code></li>
+    <li><strong>继续处理两边的 buffer</strong> — OUTPUT buffer 继续被处理并 DQBUF；CAPTURE buffer 继续被产出并 DQBUF</li>
+    <li><strong>等待 <code>V4L2_BUF_FLAG_LAST</code></strong> — 最后一个 CAPTURE buffer 会带有此标志，表示 drain 完成</li>
+    <li><strong>恢复解码</strong> — 发送 <code>V4L2_DEC_CMD_START</code></li>
+  </ol>
+
+  <p>Drain 完成后，decoder 状态不变（继续解码后续数据），但如果没有后续数据了就是 EOS。</p>
+</section>
+
+<section>
+  <h2>7. 状态转换速查表</h2>
+
+  <table>
+    <tr><th>当前状态</th><th>触发事件</th><th>下一状态</th></tr>
+    <tr><td>UNINIT</td><td>S_FMT(OUTPUT) + REQBUFS + STREAMON</td><td>INIT</td></tr>
+    <tr><td>INIT</td><td>V4L2_EVENT_SOURCE_CHANGE（分辨率已解析）</td><td>CAPTURE_SETUP</td></tr>
+    <tr><td>CAPTURE_SETUP</td><td>G_FMT → REQBUFS → STREAMON(CAPTURE)</td><td>DECODING</td></tr>
+    <tr><td>DECODING</td><td>流内分辨率变化 → SOURCE_CHANGE</td><td>DRC → CAPTURE_SETUP</td></tr>
+    <tr><td>DECODING</td><td>V4L2_DEC_CMD_STOP</td><td>DRAIN → DECODING</td></tr>
+    <tr><td>DECODING</td><td>STREAMOFF(OUTPUT)</td><td>SEEK（重新 INIT）</td></tr>
+    <tr><td>任意</td><td>close(fd)</td><td>终止</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>8. 小测验</h2>
+
+  <div class="quiz" id="quiz1">
+    <p class="quiz-q">1. 初始化阶段，decoder 如何知道真正的流分辨率？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">A. 从 S_FMT(OUTPUT) 的 width/height 参数获得</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz1')">B. 解析码流后通过 V4L2_EVENT_SOURCE_CHANGE 通知用户</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">C. 从 VIDIOC_QUERYCAP 中读取</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">D. 从 VIDIOC_ENUM_FMT 返回值中获得</div>
+    <div class="feedback" id="fb1"></div>
+  </div>
+
+  <div class="quiz" id="quiz2">
+    <p class="quiz-q">2. DRC（Dynamic Resolution Change）发生时，OUTPUT queue 应该怎么做？</p>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz2')">A. 保持 streaming，继续送入码流</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">B. 立即 STREAMOFF，等 CAPTURE 重新配置好再重启</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">C. 先 drain 再重新初始化</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">D. 关闭文件描述符重新 open</div>
+    <div class="feedback" id="fb2"></div>
+  </div>
+
+  <div class="quiz" id="quiz3">
+    <p class="quiz-q">3. Drain 完成的标志是什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">A. 所有 OUTPUT buffer 被 DQBUF 返回</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">B. 收到 V4L2_EVENT_EOS</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">C. OUTPUT 队列为空</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz3')">D. 最后一个 CAPTURE buffer 带有 V4L2_BUF_FLAG_LAST 标志</div>
+    <div class="feedback" id="fb3"></div>
+  </div>
+
+  <div class="quiz" id="quiz4">
+    <p class="quiz-q">4. Decoder 正常解码时，一个 OUTPUT buffer 一定产生一个 CAPTURE buffer 吗？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">A. 是的，一一对应</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz4')">B. 不一定，可能 0 个、1 个或多个</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">C. 至少产生一个 CAPTURE buffer</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">D. 取决于 CAPTURE buffer 数量是否足够</div>
+    <div class="feedback" id="fb4"></div>
+  </div>
+</section>
+
+<hr>
+
+<section class="next-steps">
+  <h3>📚 回顾与下一步</h3>
+  <ul>
+    <li>复习术语：<a href="GLOSSARY.md">V4L2 Glossary</a> — 确保 <code>DPB</code>、<code>coded resolution</code>、<code>resume point</code> 这些词已熟悉</li>
+    <li>阅读内核官方文档：<a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-decoder.html">Memory-to-Memory Stateful Video Decoder Interface</a></li>
+    <li>下一课建议：<strong>Stateless Decoder 与 Request API</strong> — 对比 stateful，理解 stateless 的每帧独立提交模型</li>
+    <li>或下一课建议：<strong>V4L2 调试工具实战</strong> — 用 vivid + v4l2-ctl 感受真实设备操作</li>
+  </ul>
+
+  <h3 style="margin-top: 1rem;">💬 有问题？</h3>
+  <p>这节课信息密度大——状态机转换细节容易混淆。任何不清楚的地方随时问我。如果是真实硬件上遇到的怪异问题，推荐去 <a href="https://linuxtv.org/lists.php">linux-media 邮件列表</a> 咨询。</p>
+</section>
+
+<footer>
+  Lesson 2 of the V4L2 Learning Track — <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-decoder.html">Primary Source: Stateful Decoder Interface (kernel.org)</a>
+</footer>
+
+</div>
+
+<script>
+function checkAnswer(el, quizId) {
+  var quiz = document.getElementById(quizId);
+  var options = quiz.querySelectorAll('.option');
+  var feedback = quiz.querySelector('.feedback');
+  var isCorrect = el.getAttribute('data-answer') === 'correct';
+
+  options.forEach(function(opt) {
+    opt.onclick = null;
+    opt.style.cursor = 'default';
+    if (opt === el) {
+      opt.classList.add(isCorrect ? 'correct' : 'wrong');
+      opt.classList.add('selected');
+    } else if (opt.getAttribute('data-answer') === 'correct') {
+      opt.classList.add('correct');
+    }
+  });
+
+  feedback.classList.add('show');
+  feedback.classList.add(isCorrect ? 'correct' : 'wrong');
+  feedback.textContent = isCorrect
+    ? '✓ 正确！'
+    : '✗ 再想想看。回顾一下对应章节的内容。';
+}
+</script>
+
+</body>
+</html>
