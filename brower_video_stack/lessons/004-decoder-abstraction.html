@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 4: Decoder 抽象层</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./003-demuxer-layer.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./005-compositor-videong.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 4</p>
+    <h1>Decoder 抽象层</h1>
+    <p class="subtitle">从 VDA 到 media::VideoDecoder 再到 MojoVideoDecoder，Chromium 把“解码”从 GPU 纹理专用接口演进成跨平台、跨进程、可接 CDM 的统一抽象。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <h2>1. 能力检测演示</h2>
+      <p>这个检测器使用浏览器原生 API，不加载远端视频。它用于观察当前浏览器对 codec、MediaCapabilities 和 Key System 的暴露情况。</p>
+      <div class="demo" data-capability-demo="decoder">
+        <h3>Codec / DRM capability detector</h3>
+        <button data-run-capability>重新检测</button>
+        <div class="cap-grid"></div>
+        <div class="log"></div>
+      </div>
+
+      <h2>2. VDA：旧的硬件解码抽象</h2>
+      <p><code>VideoDecoderAccelerator</code> 面向早期 ChromeOS 硬件解码，输出以 GPU Picture/texture 为核心。这让硬解接入直接，但也把接口紧耦合到 GPU 管线。</p>
+      <pre><code>class VideoDecoderAccelerator {
+  bool Initialize(const Config&amp; config, Client* client);
+  void Decode(const BitstreamBuffer&amp; bitstream_buffer);
+  void AssignPictureBuffers(...);
+  void ReusePictureBuffer(int32_t picture_buffer_id);
+  void Flush();
+  void Reset();
+};</code></pre>
+      <div class="callout warn">
+        <strong>局限：</strong>VDA 假设输出是 GPU texture，不适合软件解码、Android MediaCodec 异步模型、CDM 解密组合和更清晰的流控。
+      </div>
+
+      <h2>3. media::VideoDecoder：统一接口</h2>
+      <p>现代接口输出 <code>VideoFrame</code>，不强制 GPU texture。软件解码、VA-API、V4L2、D3D11、VideoToolbox 和 MediaCodec 都能实现同一套契约。</p>
+      <pre><code>class VideoDecoder {
+  void Initialize(const VideoDecoderConfig&amp; config,
+                  bool low_delay,
+                  CdmContext* cdm_context,
+                  InitCB init_cb,
+                  const OutputCB&amp; output_cb,
+                  const WaitingCB&amp; waiting_cb);
+
+  void Decode(scoped_refptr&lt;DecoderBuffer&gt; buffer,
+              DecodeCB decode_cb);
+
+  void Reset(ResetCB reset_cb);
+};</code></pre>
+
+      <table>
+        <tr><th>维度</th><th>VDA</th><th>media::VideoDecoder</th></tr>
+        <tr><td>输出</td><td>Picture / GPU texture</td><td>VideoFrame</td></tr>
+        <tr><td>平台</td><td>偏 ChromeOS VA-API/V4L2</td><td>Linux/Android/Windows/macOS</td></tr>
+        <tr><td>加密</td><td>扩展式接入</td><td>原生 CdmContext</td></tr>
+        <tr><td>线程模型</td><td>约定较弱</td><td>callback 驱动</td></tr>
+      </table>
+
+      <h2>4. MojoVideoDecoder：跨进程代理</h2>
+      <p>Renderer 进程中的 <code>MojoVideoDecoder</code> 通常只是客户端代理，实际硬件解码器在 GPU 进程或平台服务中。</p>
+      <pre><code>Renderer Process
+  WebMediaPlayerImpl
+    -> MojoVideoDecoder
+       -- Mojo IPC -->
+GPU Process
+  MojoVideoDecoderService
+    -> VaapiVideoDecoder / V4L2VideoDecoder / D3D11VideoDecoder
+       -> VideoFrame(Mailbox / GpuMemoryBuffer)</code></pre>
+
+      <h2>5. 加密内容：DecryptingVideoDecoder</h2>
+      <p>EME 内容需要 CDM 参与。L3 常见路径是 CDM 解密 clear bitstream，再交给普通 decoder；L1 则尽量把 key、解密后数据和 secure frame 留在硬件安全路径里。</p>
+      <pre><code>[Encrypted DecoderBuffer]
+  -> DecryptingVideoDecoder
+     -> CdmContext / CDM decrypt
+     -> downstream VideoDecoder
+     -> VideoFrame
+     -> Compositor</code></pre>
+
+      <h2>6. 平台后端速记</h2>
+      <table>
+        <tr><th>平台</th><th>后端</th><th>输出特征</th></tr>
+        <tr><td>Linux / ChromeOS</td><td>VA-API / V4L2</td><td>dma-buf / GPU buffer</td></tr>
+        <tr><td>Android</td><td>MediaCodec</td><td>Surface / AHardwareBuffer</td></tr>
+        <tr><td>Windows</td><td>D3D11 / DXVA</td><td>ID3D11Texture2D</td></tr>
+        <tr><td>macOS / iOS</td><td>VideoToolbox</td><td>CVPixelBuffer</td></tr>
+      </table>
+
+      <h2>7. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="b" data-name="l4q1" data-explain="VDA 的老接口围绕 Picture/GPU texture。">
+          <p>1. VDA 的典型输出是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l4q1" value="a"> HTMLCanvasElement</label>
+            <label><input type="radio" name="l4q1" value="b"> Picture / GPU texture</label>
+            <label><input type="radio" name="l4q1" value="c"> MPD manifest</label>
+            <label><input type="radio" name="l4q1" value="d"> License response</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="b" data-name="l4q2" data-explain="MojoVideoDecoder 是 Renderer 侧代理；服务端在 GPU/utility 等进程。">
+          <p>2. MojoVideoDecoder 在 Renderer 进程里主要扮演什么角色？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l4q2" value="a"> Display controller</label>
+            <label><input type="radio" name="l4q2" value="b"> IPC 客户端代理</label>
+            <label><input type="radio" name="l4q2" value="c"> License server</label>
+            <label><input type="radio" name="l4q2" value="d"> HTML parser</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l4q3" data-explain="CdmContext 让 decoder 能等待密钥或调用解密器。">
+          <p>3. media::VideoDecoder 初始化中与 EME 关联的对象是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l4q3" value="a"> OverlayCandidate</label>
+            <label><input type="radio" name="l4q3" value="b"> SourceBuffer</label>
+            <label><input type="radio" name="l4q3" value="c"> CdmContext</label>
+            <label><input type="radio" name="l4q3" value="d"> WaylandSurface</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>8. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/base/video_decoder.h">media/base/video_decoder.h</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/mojo/interfaces/video_decoder.mojom">media/mojo/interfaces/video_decoder.mojom</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/filters/decrypting_video_decoder.h">DecryptingVideoDecoder</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>判断题</h3>
+      <p>“硬件解码”不是一个 API。它是多套平台后端在 <code>media::VideoDecoder</code> 契约下的实现。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./003-demuxer-layer.html">上一课</a>
+      <a href="./005-compositor-videong.html">下一课：Compositor + VideoNG</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

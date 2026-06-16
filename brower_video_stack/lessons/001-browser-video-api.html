@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 1: 浏览器视频 API</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="../CURRICULUM.md">课程大纲</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./002-blink-media-player.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 1</p>
+    <h1>浏览器视频 API</h1>
+    <p class="subtitle">&lt;video&gt; / MSE / EME 是浏览器视频系统暴露给网页的三层入口。先把这三层的职责分清，后面的 Blink、demuxer、decoder 和 compositor 才能串起来。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <div class="callout tip">
+        <strong>本课目标：</strong>看到一个视频播放请求如何从 HTML API 变成资源加载、缓冲、媒体事件和后续 MSE/EME 分工。实际播放使用本地 MP4，避免远端 DASH/CDM 环境影响课堂演示。
+      </div>
+
+      <h2>1. 三个入口</h2>
+      <table>
+        <tr><th>入口</th><th>开发者看到的 API</th><th>浏览器内部含义</th></tr>
+        <tr><td>Progressive</td><td><code>&lt;video src="movie.mp4"&gt;</code></td><td>浏览器网络栈读取 URL，media pipeline 负责 demux 和 decode。</td></tr>
+        <tr><td>MSE</td><td><code>MediaSource</code> + <code>SourceBuffer.appendBuffer()</code></td><td>JavaScript 自己下载和选择 segment，再把字节推给 ChunkDemuxer。</td></tr>
+        <tr><td>EME</td><td><code>MediaKeys</code> / <code>MediaKeySession</code></td><td>网页和 CDM 协商 license，CDM 负责 key 和解密策略。</td></tr>
+      </table>
+
+      <h2>2. 实际播放：Progressive MP4</h2>
+      <p>这是浏览器原生 <code>&lt;video&gt;</code> 的真实播放。视频文件在本课程目录内，走 progressive download；你可以播放、暂停、seek，并观察真实媒体事件与 <code>readyState</code> / <code>networkState</code>。</p>
+      <div class="demo" data-real-video-demo>
+        <h3>本地 MP4 播放器 + 事件追踪</h3>
+        <video class="lesson-video" controls preload="metadata" src="../assets/media/browser-video-pipeline-demo.mp4"></video>
+        <div class="toolbar">
+          <button data-video-play>播放</button>
+          <button class="secondary" data-video-pause>暂停</button>
+          <button class="secondary" data-video-restart>从头播放</button>
+        </div>
+        <div class="media-stats">
+          <div class="media-stat"><strong>currentTime</strong><span data-video-current>--</span></div>
+          <div class="media-stat"><strong>duration</strong><span data-video-duration>--</span></div>
+          <div class="media-stat"><strong>readyState</strong><span data-video-ready>--</span></div>
+          <div class="media-stat"><strong>networkState</strong><span data-video-network>--</span></div>
+          <div class="media-stat"><strong>buffered</strong><span data-video-buffered>--</span></div>
+        </div>
+        <p class="status">等待加载</p>
+        <div class="log" aria-live="polite"></div>
+      </div>
+
+      <h2>3. 事件序列模拟</h2>
+      <p>真实播放器事件受浏览器调度、缓存和用户操作影响。下面的模拟器给出一条理想化顺序，便于把事件和 pipeline 阶段对应起来。</p>
+      <div class="demo" data-media-event-demo>
+        <h3>HTMLMediaElement 事件顺序</h3>
+        <div class="video-surface">ready</div>
+        <div class="toolbar">
+          <button data-start>自动播放事件</button>
+          <button class="secondary" data-next>单步推进</button>
+          <button class="secondary" data-reset>重置</button>
+        </div>
+        <div class="meter"><span></span></div>
+        <p class="status">等待开始</p>
+        <div class="log" aria-live="polite"></div>
+      </div>
+
+      <h2>4. Progressive 模型</h2>
+      <p>最简单的 <code>&lt;video&gt;</code> 播放走 progressive download。浏览器持有 URL，网络栈可用 byte-range 请求跳转到接近目标时间的文件区域。</p>
+      <pre><code>&lt;video controls src="movie.mp4"&gt;&lt;/video&gt;
+
+GET /movie.mp4
+Range: bytes=1048576-2097151
+
+206 Partial Content
+Content-Range: bytes 1048576-2097151/52428800</code></pre>
+      <p>这个模型简单，但它不能让网页自己做自适应码率、直播窗口、广告拼接和精确的 DRM 策略控制。</p>
+
+      <h2>5. MSE 模型</h2>
+      <p>MSE 把资源选择权交给 JavaScript。浏览器不再直接理解 DASH/HLS 清单，而是只要求被 append 的 segment 符合容器和 codec 约束。</p>
+      <pre><code>const mediaSource = new MediaSource();
+video.src = URL.createObjectURL(mediaSource);
+
+mediaSource.addEventListener("sourceopen", async () =&gt; {
+  const sb = mediaSource.addSourceBuffer(
+    'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'
+  );
+  const init = await fetch("init.mp4").then(r =&gt; r.arrayBuffer());
+  sb.appendBuffer(init);
+});</code></pre>
+
+      <h2>6. EME 模型</h2>
+      <p>EME 不负责下载媒体数据，也不规定具体 DRM。它只标准化网页、媒体元素和 CDM 的会话协议。</p>
+      <pre><code>const access = await navigator.requestMediaKeySystemAccess(
+  "com.widevine.alpha",
+  [{
+    initDataTypes: ["cenc"],
+    videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+  }]
+);
+const mediaKeys = await access.createMediaKeys();
+await video.setMediaKeys(mediaKeys);</code></pre>
+
+      <h2>7. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="b" data-name="l1q1" data-explain="MSE 的核心就是 SourceBuffer.appendBuffer()。">
+          <p>1. 哪个 API 允许 JS 手动向 video 推送媒体 segment？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l1q1" value="a"> WebRTC</label>
+            <label><input type="radio" name="l1q1" value="b"> MSE</label>
+            <label><input type="radio" name="l1q1" value="c"> EME</label>
+            <label><input type="radio" name="l1q1" value="d"> Web Audio</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l1q2" data-explain="encrypted 事件携带 initData，后续才会产生 license challenge。">
+          <p>2. 遇到加密内容时，媒体元素先触发哪个关键事件？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l1q2" value="a"> sourceopen</label>
+            <label><input type="radio" name="l1q2" value="b"> message</label>
+            <label><input type="radio" name="l1q2" value="c"> encrypted</label>
+            <label><input type="radio" name="l1q2" value="d"> waiting</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="a" data-name="l1q3" data-explain="Progressive 由浏览器网络栈读取 URL；MSE 数据来自 JS 内存。">
+          <p>3. Progressive 和 MSE 的根本差异是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l1q3" value="a"> 数据源所有权不同</label>
+            <label><input type="radio" name="l1q3" value="b"> 视频帧率不同</label>
+            <label><input type="radio" name="l1q3" value="c"> 是否需要 GPU</label>
+            <label><input type="radio" name="l1q3" value="d"> 是否支持音频</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>8. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://www.w3.org/TR/media-source/">W3C Media Source Extensions</a></li>
+        <li><a href="https://www.w3.org/TR/encrypted-media/">W3C Encrypted Media Extensions</a></li>
+        <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video">MDN: HTML video element</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>复习抓手</h3>
+      <p>把三个入口记成一句话：</p>
+      <p><strong>video 管生命周期，MSE 管字节喂入，EME 管密钥会话。</strong></p>
+      <p>遇到问题时问：数据是谁下载的？segment 是谁 append 的？key 是谁拿到的？</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./002-blink-media-player.html">下一课：Blink 层</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

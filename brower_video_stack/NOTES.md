@@ -1,0 +1,6 @@
+- 时间有限，每次 lesson 控制在 20 分钟内
+- 侧重 Chromium 实现，WebKit 次之
+- 术语需要中英对照（GLOSSARY.html 已更新为双语）
+- 跳过通用 media pipeline 基础，直击浏览器特有层（用户已有 FFmpeg 和音视频 pipeline 深度知识）
+- 嵌入式平台上特别关注浏览器如何对接到 GStreamer
+- Lesson 页面已统一为共享 CSS/JS；演示优先本地可运行，不自动加载远端 DASH/Widevine 流

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 5: Compositor + VideoNG</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./004-decoder-abstraction.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./006-linux-platform-drm.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 5</p>
+    <h1>Compositor + VideoNG</h1>
+    <p class="subtitle">解码后的 VideoFrame 还不是屏幕像素。Chromium 要在每一帧决定：这块视频直接提升为硬件 overlay，还是作为纹理进入 GPU 合成。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <h2>1. 两条显示路径</h2>
+      <table>
+        <tr><th>路径</th><th>数据流</th><th>优势</th><th>代价</th></tr>
+        <tr><td>Overlay</td><td>VideoFrame -> hardware plane -> scanout</td><td>低功耗、低延迟、少带宽</td><td>受 plane 数量、格式、变换和遮挡限制</td></tr>
+        <tr><td>GPU 合成</td><td>VideoFrame -> texture -> compositor render pass</td><td>支持任意 UI、圆角、滤镜、变换</td><td>更多 GPU 和内存带宽</td></tr>
+      </table>
+
+      <h2>2. 路径对比动画</h2>
+      <div class="demo">
+        <h3>Overlay promote vs GPU blend</h3>
+        <div class="canvas-wrap">
+          <canvas width="760" height="340" data-overlay-canvas></canvas>
+        </div>
+        <div class="toolbar">
+          <button data-mode-overlay>Overlay 路径</button>
+          <button class="secondary" data-mode-composite>合成路径</button>
+          <button class="secondary" data-toggle-hints>显示 hint</button>
+        </div>
+        <p class="status" data-frame-label>等待动画</p>
+      </div>
+
+      <h2>3. VideoFrameCompositor</h2>
+      <p><code>VideoFrameCompositor</code> 连接 media pipeline 和 cc compositor。它接收 VideoRenderer 输出的帧，并实现 <code>cc::VideoFrameProvider</code> 让 compositor 按 vsync 拉取当前帧。</p>
+      <pre><code>VideoRendererImpl
+  -> VideoFrameCompositor::PaintFrame(frame)
+  -> cc::VideoLayerImpl::AppendQuads()
+  -> viz::CompositorRenderPass
+  -> OverlayProcessor::Process()
+  -> overlay or GPU compositing</code></pre>
+
+      <h2>4. OverlayProcessor 的决策条件</h2>
+      <ul>
+        <li>候选层必须是轴对齐矩形，不能有复杂 3D transform。</li>
+        <li>候选层没有被不可合成的 UI 遮挡，或遮挡可以由硬件 plane 处理。</li>
+        <li>硬件支持该 buffer format、modifier、缩放比例和 z-order。</li>
+        <li>可用 overlay plane 数量足够。</li>
+        <li>受保护内容还要求 secure overlay 和输出保护。</li>
+      </ul>
+
+      <h2>5. Hint frame</h2>
+      <p>VideoNG 中的 hint frame 是轻量元数据：真正的视频帧到来前，先告诉 compositor 即将出现的视频尺寸、格式和 overlay 候选信息。这样可以提前做 promotion 决策，减少第一帧抖动。</p>
+
+      <h2>6. 常见退化场景</h2>
+      <div class="three-col">
+        <div class="callout warn">
+          <h3>UI 覆盖</h3>
+          <p>弹幕、字幕、浮层按钮可能导致 overlay demotion。</p>
+        </div>
+        <div class="callout warn">
+          <h3>变换复杂</h3>
+          <p>旋转、透视、滤镜和圆角通常需要 GPU 合成。</p>
+        </div>
+        <div class="callout warn">
+          <h3>plane 不足</h3>
+          <p>多个视频或 PiP 会竞争有限 overlay planes。</p>
+        </div>
+      </div>
+
+      <h2>7. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="b" data-name="l5q1" data-explain="Overlay 避免 GPU 纹理混合，直接让显示硬件扫描视频 plane。">
+          <p>1. Overlay 路径的主要优势是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l5q1" value="a"> 支持任意 CSS 滤镜</label>
+            <label><input type="radio" name="l5q1" value="b"> 低功耗和低延迟</label>
+            <label><input type="radio" name="l5q1" value="c"> 不需要解码器</label>
+            <label><input type="radio" name="l5q1" value="d"> 自动获取 license</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l5q2" data-explain="OverlayProcessor 在 viz Display 流程中分析 DrawQuad/OverlayCandidate。">
+          <p>2. 谁负责最终分析 overlay candidate？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l5q2" value="a"> FFmpegDemuxer</label>
+            <label><input type="radio" name="l5q2" value="b"> MediaKeySession</label>
+            <label><input type="radio" name="l5q2" value="c"> OverlayProcessor</label>
+            <label><input type="radio" name="l5q2" value="d"> HTML parser</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="a" data-name="l5q3" data-explain="Hint frame 让 overlay 决策可以提前准备。">
+          <p>3. Hint frame 的目的是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l5q3" value="a"> 提前发送帧元数据辅助 overlay 决策</label>
+            <label><input type="radio" name="l5q3" value="b"> 替代关键帧</label>
+            <label><input type="radio" name="l5q3" value="c"> 降低音频延迟</label>
+            <label><input type="radio" name="l5q3" value="d"> 创建 DRM license</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>8. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/renderers/video_frame_compositor.h">VideoFrameCompositor</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/cc/layers/video_layer_impl.h">cc::VideoLayerImpl</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/components/viz/service/display/overlay_processor.h">OverlayProcessor</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>工程判断</h3>
+      <p>播放器 UI 越丰富，越要接受 GPU 合成成本。机顶盒和 TV 端则常常为了功耗把 UI 设计反过来适配 overlay。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./004-decoder-abstraction.html">上一课</a>
+      <a href="./006-linux-platform-drm.html">下一课：Linux 平台层</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

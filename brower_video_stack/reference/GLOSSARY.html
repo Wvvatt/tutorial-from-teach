@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glossary: 浏览器视频术语</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="../CURRICULUM.md">课程大纲</a>
+      <a href="../lessons/001-browser-video-api.html">Lesson 1</a>
+      <a href="../lessons/007-eme-widevine-tee.html">Lesson 7</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Reference</p>
+    <h1>浏览器视频术语</h1>
+    <p class="subtitle">中英对照速查。课程中尽量使用这里的术语，避免把 Web API、Chromium 内部组件、Linux 平台机制和 DRM 安全域混在一起。</p>
+  </section>
+
+  <h2>Web API</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>HTMLMediaElement</code></td><td>HTML 媒体元素</td><td><code>&lt;video&gt;</code> 和 <code>&lt;audio&gt;</code> 的公共基类，维护状态机和事件。</td></tr>
+    <tr><td><code>Media Source Extensions (MSE)</code></td><td>媒体源扩展</td><td>允许 JavaScript 用 <code>SourceBuffer.appendBuffer()</code> 向媒体元素喂数据。</td></tr>
+    <tr><td><code>SourceBuffer</code></td><td>源缓冲区</td><td>MSE 中追加 init segment 和 media segment 的对象。</td></tr>
+    <tr><td><code>Encrypted Media Extensions (EME)</code></td><td>加密媒体扩展</td><td>标准化网页与 CDM 的密钥会话协议。</td></tr>
+    <tr><td><code>MediaKeys</code></td><td>媒体密钥对象</td><td>绑定到 media element 的 CDM 实例抽象。</td></tr>
+    <tr><td><code>MediaKeySession</code></td><td>密钥会话</td><td>生成 license challenge、接收 license、维护 key status。</td></tr>
+  </table>
+
+  <h2>Chromium Media Pipeline</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>WebMediaPlayer</code></td><td>Blink 媒体播放器接口</td><td>Blink 到 Chromium media 模块的主要抽象边界。</td></tr>
+    <tr><td><code>WebMediaPlayerImpl</code></td><td>WebMediaPlayer 实现</td><td>选择 progressive/MSE 路径，创建和驱动 media pipeline。</td></tr>
+    <tr><td><code>media::Pipeline</code></td><td>媒体流水线</td><td>组织 demuxer、decoder、renderer 的生命周期。</td></tr>
+    <tr><td><code>Demuxer</code></td><td>解封装器</td><td>把容器格式拆成带时间戳的 encoded audio/video buffers。</td></tr>
+    <tr><td><code>FFmpegDemuxer</code></td><td>FFmpeg 解封装器</td><td>progressive download 路径中的经典 demuxer。</td></tr>
+    <tr><td><code>ChunkDemuxer</code></td><td>分块解封装器</td><td>MSE 路径中的 demuxer，接收 JS append 的 bytes。</td></tr>
+    <tr><td><code>SourceBufferStream</code></td><td>源缓冲流</td><td>MSE 的 track buffer 层，管理帧、时间窗口、依赖和 eviction。</td></tr>
+    <tr><td><code>DecoderBuffer</code></td><td>解码输入缓冲</td><td>压缩后的音视频数据，送入 decoder。</td></tr>
+    <tr><td><code>VideoFrame</code></td><td>视频帧</td><td>解码输出的帧抽象，可持有系统内存、GPU mailbox 或 dma-buf。</td></tr>
+  </table>
+
+  <h2>Decoder</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>Video Decoder Accelerator (VDA)</code></td><td>视频解码加速器</td><td>旧的 Chromium 硬件解码抽象，输出偏 GPU Picture。</td></tr>
+    <tr><td><code>media::VideoDecoder</code></td><td>视频解码器接口</td><td>现代统一解码接口，输出 <code>VideoFrame</code>。</td></tr>
+    <tr><td><code>MojoVideoDecoder</code></td><td>Mojo 视频解码器代理</td><td>Renderer 进程中的跨进程 decoder 客户端。</td></tr>
+    <tr><td><code>CdmContext</code></td><td>CDM 上下文</td><td>decoder 与 CDM 解密/等待密钥逻辑的连接点。</td></tr>
+    <tr><td><code>DecryptingVideoDecoder</code></td><td>解密视频解码器</td><td>在 decode 前调用 CDM 解密，常见于 L3 路径。</td></tr>
+  </table>
+
+  <h2>Compositor</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>VideoFrameCompositor</code></td><td>视频帧合成桥</td><td>连接 media renderer 与 cc compositor。</td></tr>
+    <tr><td><code>cc::VideoLayerImpl</code></td><td>视频图层实现</td><td>在 compositor layer tree 中代表视频帧。</td></tr>
+    <tr><td><code>OverlayProcessor</code></td><td>叠加处理器</td><td>分析 DrawQuad 并决定是否提升为硬件 overlay。</td></tr>
+    <tr><td><code>OverlayCandidate</code></td><td>叠加候选</td><td>可能被提升到硬件 plane 的 quad 描述。</td></tr>
+    <tr><td><code>Hint Frame</code></td><td>提示帧</td><td>提前传递视频帧元数据，辅助 overlay 决策。</td></tr>
+  </table>
+
+  <h2>Linux Platform</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>dma-buf</code></td><td>DMA 缓冲区</td><td>Linux 跨设备共享缓冲区机制，以 fd 形式传递。</td></tr>
+    <tr><td><code>secure dma-buf</code></td><td>安全 DMA 缓冲区</td><td>普通 CPU/GPU 不可读取的受保护帧缓冲。</td></tr>
+    <tr><td><code>KMS / DRM</code></td><td>内核模式设置 / 直接渲染管理器</td><td>Linux 内核显示子系统，管理 connector、CRTC、plane。</td></tr>
+    <tr><td><code>Overlay Plane</code></td><td>叠加平面</td><td>Display controller 的独立硬件扫描输出通道。</td></tr>
+    <tr><td><code>Scanout</code></td><td>扫描输出</td><td>Display controller 通过 DMA 从 framebuffer 读取像素并输出。</td></tr>
+    <tr><td><code>Wayland linux-dmabuf</code></td><td>Wayland dma-buf 协议</td><td>Wayland 客户端向 compositor 提交 dma-buf 的协议扩展。</td></tr>
+    <tr><td><code>V4L2 M2M</code></td><td>Video4Linux2 内存到内存设备</td><td>嵌入式 SoC 常见的硬件视频解码接口。</td></tr>
+    <tr><td><code>GStreamer</code></td><td>GStreamer</td><td>嵌入式浏览器常用媒体框架，可对接 V4L2/dma-buf/EGL。</td></tr>
+  </table>
+
+  <h2>DRM / Security</h2>
+  <table>
+    <tr><th>English</th><th>中文</th><th>说明</th></tr>
+    <tr><td><code>Content Decryption Module (CDM)</code></td><td>内容解密模块</td><td>实现 DRM 协议、密钥会话和解密策略的组件。</td></tr>
+    <tr><td><code>Widevine L1</code></td><td>Widevine 硬件安全等级</td><td>密钥、解密和帧路径由 TEE/硬件安全保护。</td></tr>
+    <tr><td><code>Widevine L3</code></td><td>Widevine 软件安全等级</td><td>CDM 软件解密，安全边界弱于 L1。</td></tr>
+    <tr><td><code>Trusted Execution Environment (TEE)</code></td><td>可信执行环境</td><td>与普通 Linux/Android 世界隔离的安全执行环境。</td></tr>
+    <tr><td><code>TrustZone</code></td><td>TrustZone</td><td>ARM 的硬件隔离机制，常用于实现 TEE。</td></tr>
+    <tr><td><code>OP-TEE</code></td><td>开放 TEE OS</td><td>常见开源 TEE 实现。</td></tr>
+    <tr><td><code>HDCP</code></td><td>高带宽数字内容保护</td><td>HDMI/DP 输出链路保护协议。</td></tr>
+    <tr><td><code>Content Protection property</code></td><td>内容保护属性</td><td>Linux DRM connector 上表示 HDCP 状态的属性。</td></tr>
+  </table>
+
+  <footer class="footer">
+    <nav>
+      <a href="../lessons/001-browser-video-api.html">从 Lesson 1 开始</a>
+      <a href="../lessons/007-eme-widevine-tee.html">跳到 DRM</a>
+    </nav>
+  </footer>
+</div>
+</body>
+</html>

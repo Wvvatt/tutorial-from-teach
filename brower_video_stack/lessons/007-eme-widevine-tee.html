@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 7: EME + Widevine + TEE</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./006-linux-platform-drm.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="../CURRICULUM.md">课程大纲</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 7</p>
+    <h1>EME + DRM + TEE</h1>
+    <p class="subtitle">DRM 视频不是“播放器多一个 license 请求”这么简单。L1 要求密钥、解密、解码、帧缓冲和显示链路都落在受保护路径中。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <div class="callout tip">
+        <strong>真实播放演示：</strong>本课使用 Widevine 官方测试源。Clear 流用于确认 DASH/MSE 播放链路；CENC 加密流通过 <code>https://proxy.widevine.com/proxy</code> 请求 license，用于观察 EME/CDM 行为。
+      </div>
+
+      <h2>1. 实际播放：Clear DASH vs Widevine CENC</h2>
+      <div class="demo drm-player"
+           data-dash-drm-demo
+           data-clear-mpd="https://storage.googleapis.com/wvmedia/clear/h264/tears/tears_sd.mpd"
+           data-encrypted-mpd="https://storage.googleapis.com/wvmedia/cenc/h264/tears/tears_sd.mpd"
+           data-license-server="https://proxy.widevine.com/proxy">
+        <h3>Tears of Steel DASH player</h3>
+        <video controls muted playsinline></video>
+        <div class="toolbar">
+          <button data-load-clear>加载 Clear DASH</button>
+          <button data-load-encrypted>加载 Widevine CENC</button>
+          <button class="secondary" data-play>播放</button>
+          <button class="secondary" data-stop>停止</button>
+        </div>
+        <p class="status">等待加载</p>
+        <div class="source-card" data-source-label>未加载</div>
+        <div class="log" aria-live="polite"></div>
+      </div>
+
+      <div class="callout warn">
+        <strong>环境说明：</strong>Clear DASH 只需要 MSE；加密流需要浏览器支持 Widevine CDM。Desktop Linux 通常是 L3，Android TV / Chromebook 等认证设备才可能触发 L1/HW secure robustness。
+      </div>
+
+      <h2>2. EME 会话状态机</h2>
+      <div class="demo" data-drm-session-demo>
+        <h3>MediaKeySession 生命周期</h3>
+        <div class="pipeline-row">
+          <div class="node" data-node="Initial"><strong>Initial</strong><small>createSession()</small></div>
+          <div class="node" data-node="Pending"><strong>Pending</strong><small>generateRequest()</small></div>
+          <div class="node" data-node="License"><strong>License</strong><small>message -> server</small></div>
+          <div class="node" data-node="Usable"><strong>Usable</strong><small>update(response)</small></div>
+          <div class="node" data-node="Secure output"><strong>Secure output</strong><small>L1 display policy</small></div>
+        </div>
+        <div class="toolbar">
+          <button data-next>下一步</button>
+          <button class="secondary" data-reset>重置</button>
+        </div>
+        <p class="status">等待开始</p>
+        <div class="log"></div>
+      </div>
+
+      <h2>3. 当前浏览器能力检测</h2>
+      <div class="demo" data-capability-demo="drm">
+        <h3>EME / codec detector</h3>
+        <button data-run-capability>重新检测</button>
+        <div class="cap-grid"></div>
+        <div class="log"></div>
+      </div>
+
+      <h2>4. EME API 骨架</h2>
+      <pre><code>const access = await navigator.requestMediaKeySystemAccess(
+  "com.widevine.alpha",
+  [{
+    initDataTypes: ["cenc"],
+    videoCapabilities: [{
+      contentType: 'video/mp4; codecs="avc1.640028"',
+      robustness: "SW_SECURE_DECODE"
+    }]
+  }]
+);
+
+const mediaKeys = await access.createMediaKeys();
+await video.setMediaKeys(mediaKeys);
+const session = mediaKeys.createSession();
+
+session.addEventListener("message", async event =&gt; {
+  const license = await fetch(licenseServer, {
+    method: "POST",
+    body: event.message
+  }).then(r =&gt; r.arrayBuffer());
+  await session.update(license);
+});
+
+await session.generateRequest("cenc", initData);</code></pre>
+
+      <h2>5. Widevine L1 vs L3</h2>
+      <table>
+        <tr><th>维度</th><th>L1</th><th>L3</th></tr>
+        <tr><td>密钥位置</td><td>TEE / secure hardware</td><td>用户态 CDM 内存</td></tr>
+        <tr><td>解密位置</td><td>TEE 或硬件安全路径</td><td>软件解密</td></tr>
+        <tr><td>解码后帧</td><td>secure buffer / secure dma-buf</td><td>普通 YUV / GPU buffer</td></tr>
+        <tr><td>显示</td><td>secure overlay + HDCP</td><td>普通合成路径</td></tr>
+        <tr><td>典型平台</td><td>Android TV、Chromebook、认证设备</td><td>Desktop Linux/Chrome 常见</td></tr>
+      </table>
+
+      <h2>6. L3 软件路径</h2>
+      <pre><code>Encrypted segment
+  -> MSE / demuxer
+  -> encrypted DecoderBuffer
+  -> CDM process decrypts clear bitstream
+  -> software or hardware decoder
+  -> normal VideoFrame
+  -> GPU compositor / overlay if allowed</code></pre>
+      <p>L3 的密钥和明文帧对 OS 安全边界来说更可见，因此内容策略通常限制分辨率或输出能力。</p>
+
+      <h2>7. L1 secure path</h2>
+      <pre><code>Encrypted bitstream
+  -> CDM / TEE key handle
+  -> secure decrypt
+  -> hardware decoder
+  -> secure dma-buf
+  -> secure overlay plane
+  -> HDCP-protected connector</code></pre>
+      <p>L1 的关键不是“能不能播”，而是明文 key 和解密后的像素是否永远不暴露给普通世界。</p>
+
+      <h2>8. TEE 与 secure dma-buf</h2>
+      <p>TEE 通过 TrustZone/OP-TEE 等机制把 secure world 与 Linux normal world 隔离。secure dma-buf 可以作为句柄出现在普通世界，但 CPU map 和非 secure GPU shader 读取应被拒绝。</p>
+      <pre><code>if (dma_buf_is_secure(dbuf) &amp;&amp; request_cpu_map)
+  return -EPERM;
+
+if (fb-&gt;secure &amp;&amp; !plane_supports_secure_scanout)
+  return -EACCES;</code></pre>
+
+      <h2>9. 输出保护</h2>
+      <p>HDMI/DP 外接显示还需要 HDCP。Linux DRM connector 的 <code>Content Protection</code> property 常见状态包括 <code>UNDESIRED</code>、<code>DESIRED</code>、<code>ENABLED</code>。</p>
+
+      <h2>10. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="c" data-name="l7q1" data-explain="session.update() 把 license 响应交给 CDM。">
+          <p>1. EME 中哪个方法提交 license 响应？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l7q1" value="a"> createSession()</label>
+            <label><input type="radio" name="l7q1" value="b"> generateRequest()</label>
+            <label><input type="radio" name="l7q1" value="c"> update()</label>
+            <label><input type="radio" name="l7q1" value="d"> canPlayType()</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="b" data-name="l7q2" data-explain="L1 的关键是 TEE/硬件安全路径；L3 是软件安全等级。">
+          <p>2. Widevine L1 与 L3 最核心区别是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l7q2" value="a"> L1 使用 DASH，L3 使用 HLS</label>
+            <label><input type="radio" name="l7q2" value="b"> L1 在硬件安全路径保护密钥和帧</label>
+            <label><input type="radio" name="l7q2" value="c"> L1 不需要 license</label>
+            <label><input type="radio" name="l7q2" value="d"> L3 不能播放音频</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="a" data-name="l7q3" data-explain="secure dma-buf 允许句柄传递，但禁止普通 CPU/GPU 读取明文像素。">
+          <p>3. secure dma-buf 的目的是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l7q3" value="a"> 安全传递受保护帧且阻止普通 CPU 读取</label>
+            <label><input type="radio" name="l7q3" value="b"> 加快 CSS 布局</label>
+            <label><input type="radio" name="l7q3" value="c"> 替代 MPD 清单</label>
+            <label><input type="radio" name="l7q3" value="d"> 存储字幕</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>11. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://www.w3.org/TR/encrypted-media/">W3C Encrypted Media Extensions</a></li>
+        <li><a href="https://www.chromium.org/Home/chromium-security/eme/">Chromium EME design</a></li>
+        <li><a href="https://optee.readthedocs.io/">OP-TEE documentation</a></li>
+        <li><a href="https://source.android.com/docs/core/graphics/secure-video">Android secure video path</a></li>
+        <li><a href="https://www.axinom.com/drm-test-vectors">Axinom DRM test vectors</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>别混淆</h3>
+      <p>EME 是 Web API，CDM 是实现模块，Widevine 是 key system，TEE 是硬件安全环境。它们不是同一层。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./006-linux-platform-drm.html">上一课</a>
+      <a href="../CURRICULUM.md">回到课程大纲</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/vendor/dash.all.min.js"></script>
+<script src="../assets/course.js"></script>
+</body>
+</html>

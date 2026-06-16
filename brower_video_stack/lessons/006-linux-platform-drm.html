@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 6: Linux 平台层</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./005-compositor-videong.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./007-eme-widevine-tee.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 6</p>
+    <h1>Linux 平台层</h1>
+    <p class="subtitle">在嵌入式 Linux 上，浏览器视频性能最终取决于 dma-buf、Wayland、KMS plane、V4L2/GStreamer 与 compositor 的协作。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <h2>1. 三种“层”</h2>
+      <table>
+        <tr><th>层</th><th>在哪里</th><th>含义</th></tr>
+        <tr><td>cc::Layer</td><td>Chromium Renderer/Compositor</td><td>网页内容的合成层，包括 video layer。</td></tr>
+        <tr><td>Wayland surface</td><td>Wayland client/compositor</td><td>客户端提交给 compositor 的窗口或子表面。</td></tr>
+        <tr><td>KMS plane</td><td>Linux kernel/display controller</td><td>显示控制器硬件扫描输出通道。</td></tr>
+      </table>
+
+      <h2>2. dma-buf 贯穿链路</h2>
+      <p><code>dma-buf</code> 是一个跨设备共享缓冲区的文件描述符。视频解码器、GPU 和 display controller 可以围绕同一块 buffer 协作，避免 CPU 拷贝。</p>
+      <pre><code>V4L2 decoder
+  -> decode into dma-buf
+  -> EGL imports dma-buf as image/texture
+  -> Wayland linux-dmabuf creates wl_buffer
+  -> KMS atomic commit attaches framebuffer to plane
+  -> display controller scanout</code></pre>
+
+      <h2>3. Overlay plane 预算模拟</h2>
+      <p>很多低成本 SoC 只有 1-2 个可用 video overlay。这个小模拟用于快速判断多路视频会如何回退到 GPU 合成。</p>
+      <div class="demo" data-plane-budget-demo>
+        <h3>Plane budget</h3>
+        <div class="toolbar">
+          <label>overlay planes <input type="number" min="0" max="8" value="1" data-overlay-count></label>
+          <label>video layers <input type="number" min="0" max="8" value="2" data-video-count></label>
+        </div>
+        <div class="readout"></div>
+      </div>
+
+      <h2>4. KMS atomic commit</h2>
+      <p>Atomic commit 允许一次提交多个 plane 的 framebuffer、位置、尺寸和 z-order，避免中间状态造成撕裂。</p>
+      <pre><code>drmModeAtomicSetProperty(req, plane_id, "FB_ID", fb_id);
+drmModeAtomicSetProperty(req, plane_id, "CRTC_ID", crtc_id);
+drmModeAtomicSetProperty(req, plane_id, "SRC_X", src_x &lt;&lt; 16);
+drmModeAtomicSetProperty(req, plane_id, "SRC_W", src_w &lt;&lt; 16);
+drmModeAtomicSetProperty(req, plane_id, "CRTC_W", dst_w);
+
+drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_NONBLOCK, NULL);</code></pre>
+
+      <h2>5. Wayland linux-dmabuf</h2>
+      <p>浏览器作为 Wayland client 把 dma-buf fd 交给 compositor。compositor 再决定导入 GPU 合成，或尝试把它直接放到 KMS overlay plane。</p>
+      <pre><code>zwp_linux_buffer_params_v1_add(params, fd, plane, offset, stride, modifier_hi, modifier_lo);
+wl_buffer *buffer = zwp_linux_buffer_params_v1_create_immed(
+  params, width, height, DRM_FORMAT_NV12, flags);
+wl_surface_attach(surface, buffer, 0, 0);
+wl_surface_commit(surface);</code></pre>
+
+      <h2>6. GStreamer 对接视角</h2>
+      <p>WebKit/WPE 和一些 Chromium 嵌入式分支会用 GStreamer 连接网络、demux、decode 和 sink。关键是让硬件解码器输出 <code>memory:DMABuf</code>，再导入 EGL/Wayland。</p>
+      <pre><code>souphttpsrc ! qtdemux ! h264parse ! v4l2h264dec !
+  video/x-raw(memory:DMABuf),format=NV12 !
+  glimagesink</code></pre>
+
+      <div class="callout tip">
+        <strong>嵌入式优化目标：</strong>让视频帧从 VPU 到 display controller 尽量保持 dma-buf handle 传递，而不是回到 CPU 内存再上传。
+      </div>
+
+      <h2>7. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="b" data-name="l6q1" data-explain="dma-buf 通过 fd 跨进程和跨设备传递。">
+          <p>1. dma-buf 对用户态通常表现为什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l6q1" value="a"> 虚拟地址</label>
+            <label><input type="radio" name="l6q1" value="b"> 文件描述符</label>
+            <label><input type="radio" name="l6q1" value="c"> JavaScript 对象</label>
+            <label><input type="radio" name="l6q1" value="d"> HTTP header</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l6q2" data-explain="scanout 由 display controller 通过 DMA 读取 framebuffer。">
+          <p>2. scanout 过程中谁读取像素？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l6q2" value="a"> CPU 循环逐像素写</label>
+            <label><input type="radio" name="l6q2" value="b"> License server</label>
+            <label><input type="radio" name="l6q2" value="c"> Display controller</label>
+            <label><input type="radio" name="l6q2" value="d"> HTML parser</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="a" data-name="l6q3" data-explain="plane/scaler 是硬件资源，数量受芯片面积、功耗和验证成本限制。">
+          <p>3. 为什么嵌入式 SoC 的 overlay plane 数量有限？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l6q3" value="a"> 硬件成本和功耗</label>
+            <label><input type="radio" name="l6q3" value="b"> HTML 规范限制</label>
+            <label><input type="radio" name="l6q3" value="c"> MP4 文件限制</label>
+            <label><input type="radio" name="l6q3" value="d"> CSS 只能有两层</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>8. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://www.kernel.org/doc/html/latest/driver-api/dma-buf.html">Linux dma-buf documentation</a></li>
+        <li><a href="https://dri.freedesktop.org/docs/drm/gpu/drm-kms.html">DRM/KMS documentation</a></li>
+        <li><a href="https://wayland.app/protocols/linux-dmabuf-v1">Wayland linux-dmabuf protocol</a></li>
+        <li><a href="https://gstreamer.freedesktop.org/documentation/additional/design/dmabuf.html">GStreamer dma-buf design</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>平台口诀</h3>
+      <p>VPU 解码到 dma-buf，Wayland 传 fd，KMS plane 扫描输出。只要中途 copy 回 CPU，就要警惕功耗和延迟。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./005-compositor-videong.html">上一课</a>
+      <a href="./007-eme-widevine-tee.html">下一课：EME + TEE</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

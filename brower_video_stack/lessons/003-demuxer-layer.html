@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 3: Demuxer 层</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./002-blink-media-player.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./004-decoder-abstraction.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 3</p>
+    <h1>Demuxer 层</h1>
+    <p class="subtitle">Demuxer 把容器格式拆成按轨道组织的 encoded frames。浏览器中最重要的分叉是 progressive 的拉模型与 MSE 的推模型。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <h2>1. 容器不是编码</h2>
+      <p>MP4、WebM、MPEG-TS 是容器；H.264、VP9、AV1、AAC 是 codec。Demuxer 的工作是从容器中拆出音视频轨道、时间戳、codec config 和 encoded frame。</p>
+
+      <table>
+        <tr><th>路径</th><th>数据模型</th><th>典型 demuxer</th><th>触发方式</th></tr>
+        <tr><td>Progressive</td><td>pull</td><td>FFmpegDemuxer / 平台 demuxer</td><td><code>&lt;video src&gt;</code></td></tr>
+        <tr><td>MSE</td><td>push</td><td>ChunkDemuxer</td><td><code>SourceBuffer.appendBuffer()</code></td></tr>
+      </table>
+
+      <h2>2. FFmpegDemuxer</h2>
+      <pre><code>DataSource(url/file)
+  -> avformat_open_input()
+  -> avformat_find_stream_info()
+  -> create DemuxerStream per track
+  -> av_read_frame()
+  -> DecoderBuffer(audio/video)</code></pre>
+      <p>Progressive 路径适合直接播放单个文件。seek 依赖容器索引和 byte range，demuxer 要找到目标时间之前最近的关键帧。</p>
+
+      <h2>3. ChunkDemuxer</h2>
+      <pre><code>JS: sourceBuffer.appendBuffer(segment)
+  -> SourceBuffer::AppendBuffer()
+  -> ChunkDemuxer::AppendData()
+  -> MP4StreamParser / WebMStreamParser
+  -> FrameProcessor
+  -> SourceBufferStream</code></pre>
+      <p>MSE 路径的复杂度在 SourceBufferStream：它要维护 append window、timestampOffset、track buffer、keyframe dependency 和 eviction。</p>
+
+      <h2>4. MSE appendBuffer 模拟器</h2>
+      <div class="demo" data-mse-frame-demo>
+        <h3>SourceBufferStream 帧处理</h3>
+        <div class="chips">
+          <span class="chip blue">init segment</span>
+          <span class="chip bad">I frame</span>
+          <span class="chip">P/B frame</span>
+          <span class="chip good">decoded output</span>
+          <span class="chip warn">orphan drop</span>
+        </div>
+        <div class="toolbar">
+          <button data-append="init">append init</button>
+          <button data-append="key">append I</button>
+          <button data-append="delta">append P/B</button>
+          <button class="secondary" data-decode>decoder read</button>
+          <button class="secondary" data-clear>清空</button>
+          <label><input type="checkbox" data-drop-orphan checked> 丢弃无关键帧依赖的 delta</label>
+        </div>
+        <div class="frame-track"></div>
+        <div class="log"></div>
+      </div>
+
+      <h2>5. seek 为什么要找关键帧</h2>
+      <p>Decoder 不能从任意 P/B 帧开始，因为 delta frame 依赖之前的参考帧。Demuxer seek 的目标不是精确的 presentation time，而是目标时间之前最近的可解码点。</p>
+      <pre><code>Seek(12.5s)
+  -> SourceBufferStream::Seek(12.5s)
+  -> find keyframe <= 12.5s
+  -> discard frames before keyframe
+  -> verify dependencies
+  -> decoder starts from keyframe</code></pre>
+
+      <h2>6. DTS 与 PTS</h2>
+      <p>B 帧会让解码顺序和显示顺序不同。Demuxer/stream 需要保留两套时间关系。</p>
+      <pre><code>DTS order: I1  P4  B2  B3  P7  B5  B6
+PTS order: I1  B2  B3  P4  B5  B6  P7</code></pre>
+
+      <h2>7. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="b" data-name="l3q1" data-explain="ChunkDemuxer 的数据来自 JS appendBuffer。">
+          <p>1. ChunkDemuxer 的数据来源是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l3q1" value="a"> DataSource 自动读取 URL</label>
+            <label><input type="radio" name="l3q1" value="b"> SourceBuffer.appendBuffer()</label>
+            <label><input type="radio" name="l3q1" value="c"> KMS plane</label>
+            <label><input type="radio" name="l3q1" value="d"> CDM license</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l3q2" data-explain="seek 要落到可独立开始解码的关键帧。">
+          <p>2. seek 通常先定位到什么帧？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l3q2" value="a"> 最近 B 帧</label>
+            <label><input type="radio" name="l3q2" value="b"> 最近 P 帧</label>
+            <label><input type="radio" name="l3q2" value="c"> 最近关键帧</label>
+            <label><input type="radio" name="l3q2" value="d"> 任意帧</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="a" data-name="l3q3" data-explain="容器负责打包，codec 负责压缩编码。">
+          <p>3. MP4 和 H.264 的关系是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l3q3" value="a"> MP4 是容器，H.264 是 codec</label>
+            <label><input type="radio" name="l3q3" value="b"> MP4 是 codec，H.264 是容器</label>
+            <label><input type="radio" name="l3q3" value="c"> 两者都是 DRM</label>
+            <label><input type="radio" name="l3q3" value="d"> 两者都是 display API</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>8. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/filters/chunk_demuxer.h">Chromium ChunkDemuxer</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/filters/source_buffer_stream.h">SourceBufferStream</a></li>
+        <li><a href="https://ffmpeg.org/doxygen/trunk/group__lavf__decoding.html">FFmpeg libavformat decoding</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>一句话</h3>
+      <p>Demuxer 不解码像素。它只负责把容器拆成带时间戳、依赖关系和 codec config 的 encoded buffers。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./002-blink-media-player.html">上一课</a>
+      <a href="./004-decoder-abstraction.html">下一课：Decoder 抽象</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

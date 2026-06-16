@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 2: Blink 到 WebMediaPlayer</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <span>Browser Video Pipeline</span>
+    <nav>
+      <a href="./001-browser-video-api.html">上一课</a>
+      <a href="../reference/GLOSSARY.html">术语表</a>
+      <a href="./003-demuxer-layer.html">下一课</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Lesson 2</p>
+    <h1>Blink 层桥接</h1>
+    <p class="subtitle">一个 <code>&lt;video&gt;</code> 标签不会直接进入 decoder。它先在 Blink 中变成 HTMLMediaElement 的状态机，再通过 WebMediaPlayer 接口进入 Chromium media pipeline。</p>
+  </section>
+
+  <div class="lesson-grid">
+    <main>
+      <h2>1. 核心路径</h2>
+      <div class="pipeline" data-blink-bridge-demo>
+        <div class="pipeline-row">
+          <div class="node" data-node="HTMLVideoElement"><strong>HTMLVideoElement</strong><small>DOM 节点，视频专属属性</small></div>
+          <div class="node" data-node="HTMLMediaElement"><strong>HTMLMediaElement</strong><small>媒体状态机和事件</small></div>
+          <div class="node" data-node="WebMediaPlayer"><strong>WebMediaPlayer</strong><small>Blink 平台抽象接口</small></div>
+        </div>
+        <div class="pipeline-row">
+          <div class="node" data-node="WebMediaPlayerImpl"><strong>WebMediaPlayerImpl</strong><small>选择 progressive / MSE</small></div>
+          <div class="node" data-node="media::Pipeline"><strong>media::Pipeline</strong><small>demux / decode / render</small></div>
+          <div class="node" data-node="Compositor"><strong>Compositor</strong><small>cc::VideoFrameProvider</small></div>
+        </div>
+        <div class="toolbar">
+          <button data-advance>推进一次 load/play 链路</button>
+          <button class="secondary" data-reset>重置</button>
+        </div>
+        <p class="status">等待开始</p>
+        <div class="log"></div>
+      </div>
+
+      <h2>2. HTMLMediaElement 的职责</h2>
+      <table>
+        <tr><th>职责</th><th>说明</th></tr>
+        <tr><td>属性和状态</td><td>维护 <code>readyState</code>、<code>networkState</code>、<code>duration</code>、<code>seeking</code>。</td></tr>
+        <tr><td>资源选择</td><td>处理 <code>src</code>、<code>&lt;source&gt;</code>、preload 和 load algorithm。</td></tr>
+        <tr><td>事件派发</td><td>向 JS 发出 <code>loadedmetadata</code>、<code>canplay</code>、<code>waiting</code>、<code>timeupdate</code> 等。</td></tr>
+        <tr><td>平台桥接</td><td>通过 WebMediaPlayer 调用底层 media 实现。</td></tr>
+      </table>
+
+      <h2>3. readyState 状态机</h2>
+      <pre><code>HAVE_NOTHING
+  load() / src changed
+HAVE_METADATA
+  duration, tracks, dimensions known
+HAVE_CURRENT_DATA
+  current frame available
+HAVE_FUTURE_DATA
+  at least next frame available
+HAVE_ENOUGH_DATA
+  enough buffered data for playback</code></pre>
+
+      <div class="callout warn">
+        <strong>关键点：</strong>JS 看到的是 HTMLMediaElement 状态，但底层的 readyState 变化通常来自 demuxer、decoder、buffering 和 compositor 的异步回调。
+      </div>
+
+      <h2>4. WebMediaPlayerImpl 的两条 load 路径</h2>
+      <div class="two-col">
+        <div class="callout">
+          <h3>Progressive</h3>
+          <ul>
+            <li>URL 由浏览器网络栈读取</li>
+            <li>DataSource 提供 byte range</li>
+            <li>通常进入 FFmpegDemuxer 或平台 demuxer</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <h3>MSE</h3>
+          <ul>
+            <li>JS 下载和选择 segment</li>
+            <li>SourceBuffer 推送字节</li>
+            <li>进入 ChunkDemuxer 和 SourceBufferStream</li>
+          </ul>
+        </div>
+      </div>
+
+      <pre><code>HTMLMediaElement::LoadResource()
+  -> CreateWebMediaPlayer()
+  -> WebMediaPlayerImpl::Load()
+     -> choose demuxer
+     -> media::Pipeline::Start()
+        -> Demuxer::Initialize()
+        -> Decoder::Initialize()
+        -> Renderer::Initialize()</code></pre>
+
+      <h2>5. Mojo/IPC 边界</h2>
+      <p>Blink 运行在 Renderer 进程，但现代 Chromium 的硬件解码、CDM 和 GPU 合成通常跨进程。WebMediaPlayerImpl 持有的对象很多只是代理。</p>
+      <table>
+        <tr><th>边界</th><th>典型用途</th></tr>
+        <tr><td>Renderer -> GPU</td><td>MojoVideoDecoder、VideoFrameCompositor、shared image</td></tr>
+        <tr><td>Renderer -> CDM</td><td>ContentDecryptionModule、license session</td></tr>
+        <tr><td>Renderer -> Browser</td><td>全屏、媒体会话、权限和页面生命周期</td></tr>
+      </table>
+
+      <h2>6. 测验</h2>
+      <div class="quiz" data-quiz>
+        <h3>检索练习</h3>
+        <div class="quiz-question" data-answer="a" data-name="l2q1" data-explain="HTMLVideoElement 只是视频专用子类，公共媒体逻辑在 HTMLMediaElement。">
+          <p>1. HTMLVideoElement 与 HTMLMediaElement 的关系是？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l2q1" value="a"> 前者继承后者</label>
+            <label><input type="radio" name="l2q1" value="b"> 后者继承前者</label>
+            <label><input type="radio" name="l2q1" value="c"> 两者无关</label>
+            <label><input type="radio" name="l2q1" value="d"> 都只在 GPU 进程</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="c" data-name="l2q2" data-explain="MSE 使用 ChunkDemuxer；progressive 才由 URL/DataSource 驱动。">
+          <p>2. MSE 路径的数据主要来自哪里？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l2q2" value="a"> 浏览器自动读取整个文件</label>
+            <label><input type="radio" name="l2q2" value="b"> GPU 进程生成</label>
+            <label><input type="radio" name="l2q2" value="c"> JavaScript appendBuffer</label>
+            <label><input type="radio" name="l2q2" value="d"> Display controller</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <div class="quiz-question" data-answer="b" data-name="l2q3" data-explain="WebMediaPlayer 是 Blink 到 media 的平台抽象边界。">
+          <p>3. Blink 到 Chromium media pipeline 的主要桥接接口是什么？</p>
+          <div class="quiz-options">
+            <label><input type="radio" name="l2q3" value="a"> SourceBufferStream</label>
+            <label><input type="radio" name="l2q3" value="b"> WebMediaPlayer</label>
+            <label><input type="radio" name="l2q3" value="c"> OverlayProcessor</label>
+            <label><input type="radio" name="l2q3" value="d"> V4L2Queue</label>
+          </div>
+          <div class="feedback"></div>
+        </div>
+        <button data-quiz-submit>提交答案</button>
+        <button class="secondary" data-quiz-reset>重置</button>
+        <div class="quiz-score" data-quiz-score></div>
+      </div>
+
+      <h2>7. 推荐阅读</h2>
+      <ul>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/html/media/html_media_element.h">HTMLMediaElement header</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/platform/media/web_media_player_impl.h">WebMediaPlayerImpl header</a></li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/media/base/pipeline.h">media::Pipeline</a></li>
+      </ul>
+    </main>
+
+    <aside class="side-note">
+      <h3>调试线索</h3>
+      <p>定位播放问题时，先问它卡在哪一层：</p>
+      <ul>
+        <li>事件没发：HTMLMediaElement</li>
+        <li>buffer 不涨：MSE / demuxer</li>
+        <li>有帧不上屏：compositor / overlay</li>
+      </ul>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <nav>
+      <a href="./001-browser-video-api.html">上一课</a>
+      <a href="./003-demuxer-layer.html">下一课：Demuxer 层</a>
+    </nav>
+  </footer>
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>
