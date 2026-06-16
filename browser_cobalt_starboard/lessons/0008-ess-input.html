@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0008: ESS Input — 按键/鼠标/遥控器处理</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0008: ESS Input — 按键/鼠标/遥控器处理</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第八课</p>
+
+<p>之前的课程都是内部处理。这一课看<strong>外部输入到内部事件的转换</strong>——ESSOS 的按键/指针回调如何变成 Starboard <code>SbInputData</code> 事件注入 Cobalt。</p>
+
+<h2>1. 事件流全景</h2>
+
+<pre><code>--- ess_input.cc:547-623, application_aml.cc:62-69 ---
+
+ESSOS 驱动层
+    │  keyListener / pointerListener 回调
+    ▼
+Application::OnKeyPressed/Released/OnPointerMotion/ButtonPress/Release
+    │
+    ▼
+EssInput::OnKeyPressed/OnKeyReleased/OnPointerMotion/...
+    │
+    ├── KeyCodeToSbKey()         ← Linux event code → SbKey 映射
+    ├── KeyCodeToSbKeyLocation() ← 按键位置 (左/右 Ctrl/Shift/Alt)
+    ├── UpdateModifiers()        ← 跟踪 Ctrl/Shift/Alt/Meta 状态
+    └── CreateKey()              ← 构造 SbInputData, 处理按键重复
+         │
+         ▼
+    Application::Get()->InjectInputEvent(data)   ← 注入 Starboard 事件队列</code></pre>
+
+<h2>2. Key Code 映射表</h2>
+
+<p><code>KeyCodeToSbKey()</code> 是一个大 switch-case，映射 Linux <code>linux/input.h</code> 的 event code 到 Starboard 的 <code>SbKey</code>：</p>
+
+<pre><code>--- ess_input.cc:56-370 ---
+
+特殊映射:
+  KEY_F12     → kSbKeyMicrophone    ← 语音键
+  KEY_PLAY    → kSbKeyPlay
+  KEY_F1      → kSbKeyLaunchThisApplication
+
+  KEY_BACK    → kSbKeyBrowserBack   ← USB 键盘多媒体键
+  KEY_MUTE    → kSbKeyVolumeMute
+  KEY_VOLUMEUP/DOWN → kSbKeyVolumeUp/Down
+  KEY_CHANNELUP/DOWN → kSbKeyChannelUp/Down
+
+  KEY_REWIND/FASTFORWARD → kSbKeyMediaRewind/FastForward
+  KEY_PLAYPAUSE → kSbKeyMediaPlayPause
+
+  KEY_RED/GREEN/YELLOW/BLUE → kSbKeyRed/Green/Yellow/Blue
+  KEY_SUBTITLE  → kSbKeySubtitle
+  KEY_AUDIO     → kSbKeyMediaAudioTrack</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 行277-288 的注释揭示了嵌入式开发的真实痛点</div>
+<code>KEY_F5</code>（红外码 116）被<strong>故意不映射</strong>——因为电视关机时 CEC 会发 F5 键，导致 Cobalt 重新加载页面并使进程挂起。注释说"这应该是测试页面的问题"，但为了稳定性直接禁掉了。
+</div>
+
+<h2>3. Ctrl+Key 遥控器快捷键</h2>
+
+<p>电视遥控器按键少，Ctrl 组合键提供了额外的功能：</p>
+
+<pre><code>--- ess_input.cc:428-461 ---
+
+CreateKey() 如果 modifiers == Ctrl:
+  Ctrl+M → 菜单
+  Ctrl+G → 节目指南     Ctrl+I → 信息
+  Ctrl+R → 录像         Ctrl+Y → 静音
+  Ctrl+U → 音量+        Ctrl+L → ESC
+  Ctrl+D → 音量-        Ctrl+F → 快进
+  Ctrl+B → 回放         Ctrl+W → 快退
+  Ctrl+C → 搜索         Ctrl+P → 播放/暂停
+  Ctrl+0/1/2/3 → 红/绿/黄/蓝
+  Ctrl+↑/↓ → 频道+/频道-</code></pre>
+
+<h2>4. 按键重复逻辑</h2>
+
+<p>YouTube 技术规范要求：按键按下 500ms 后每隔 50ms 重复发一次 keydown：</p>
+
+<pre><code>--- ess_input.cc:46-53, 485-506 ---
+
+kKeyHoldTime = 500ms, kKeyRepeatTime = 50ms
+
+CreateKey(key, Press, repeatable):
+  1. 构造 SbInputData → InjectInputEvent
+  2. 如果 repeatable && Press:
+     key_repeat_key_ = key
+     SbEventSchedule(CreateRepeatKey, this, kKeyHoldTime)
+     // 500ms 后触发 ⬇
+
+CreateRepeatKey():
+  1. key_repeat_interval_ 从 500ms 改为 50ms
+  2. 递归调用 CreateKey(Press, repeatable)
+     // 又一次 Inject + Schedule → 50ms 后再次触发
+     // 循环直到用户松手 → DeleteRepeatKey()</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 设计巧妙处</div>
+关键逻辑在第 537-538 行: <code>if (Press && repeatable && key == key_repeat_key_ && key_repeat_state_) return;</code>
+<br>如果按键按下期间又收到同键的 Press 事件（ESSOS 底层重复上报），直接跳过——防止重复的重复。只有 Release 事件才能终止循环。
+</div>
+
+<h2>5. Modifier 跟踪</h2>
+
+<pre><code>--- ess_input.cc:517-527 ---
+
+UpdateModifiers(key, type):
+  if (key 是 Ctrl/Shift/Alt/Meta):
+    Press   → key_modifiers_ |= modifier
+    Unpress → key_modifiers_ &= ~modifier
+    return true  ← 不产生输入事件（修饰键本身不是输入）
+
+  只有普通键在有 modifier 时才会处理（如 Ctrl+M）</code></pre>
+
+<h2>6. 指针/鼠标支持</h2>
+
+<pre><code>--- ess_input.cc:555-623 ---
+
+OnPointerMotion(x, y):           → SbInputEventTypeMove
+OnPointerButtonPress(btn, x, y): → SbInputEventTypePress, kSbInputDeviceTypeMouse
+OnPointerButtonRelease(btn, x, y): → SbInputEventTypeUnpress
+
+鼠标按钮映射: BTN_LEFT → kSbKeyMouse1, BTN_RIGHT → kSbKeyMouse2</code></pre>
+
+<p>指针和键盘的区别：指针事件设置 <code>data->position.x/y</code>，且 device_type 为 <code>kSbInputDeviceTypeMouse</code> 而非 <code>Remote</code>。</p>
+
+<h2>7. 动手练习</h2>
+<ol>
+  <li>在 <code>ess_input.cc</code> 中找到 <code>KeyCodeToSbKey</code> 的摄像头/语音/频道切换等键的映射</li>
+  <li>追踪 <code>InjectInputEvent</code> 到 Cobalt 事件的完整路径</li>
+  <li>理解按键重复的"500ms首延迟 + 50ms循环" 如何通过 SbEventSchedule 实现</li>
+</ol>
+
+<h2>8. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (ESSOS 集成)</li>
+  <li>Linux Input 子系统: <code>linux/input.h</code> (event code 定义)</li>
+</ul>
+
+<div class="footer">
+Lesson 0008 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

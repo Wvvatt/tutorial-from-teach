@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0003: Widevine DRM 内容保护</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem;
+  }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0003: Widevine DRM 内容保护</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第三课</p>
+
+<p>前两课我们看到了 Player 模块中有大量 DRM 相关代码——PendingSample、secmem、OnKeyReady。这一课深入 <strong>Widevine DRM</strong> 模块本身，了解加密内容的授权、解密和安全播放的完整链路。</p>
+
+<h2>1. 架构概览</h2>
+
+<p>Widevine 是 Google 的 DRM 方案，被 YouTube、Netflix 等主流流媒体使用。AML 的 DRM 栈分三层：</p>
+
+<div class="diagram">
+Cobalt EME (Encrypted Media Extensions)
+    │
+    ↓  SbDrmSystem API
+┌──────────────────────────────────┐
+│  DrmSystemWidevine               │  ← AML 实现
+│  ┌────────────────────────────┐  │
+│  │  wv3cdm (::widevine::Cdm)  │  │  ← Widevine CDM 3.5
+│  └────────────────────────────┘  │
+│  WidevineStorage  ← 密钥持久化   │
+│  WidevineTimer    ← CDM 定时器   │
+└──────────────────────────────────┘
+    │
+    ↓  Observer::OnKeyReady()
+PlayerImpl (第二课)
+    │
+    ↓  Decrypt() via GStreamer
+GStreamer pipeline → secmem → HW decoder
+</div>
+
+<table>
+<tr><th>层</th><th>文件</th><th>职责</th></tr>
+<tr><td><code>SbDrmCreateSystem</code></td><td><code>drm_create_system.cc:31-62</code></td><td>Starboard DRM 系统工厂</td></tr>
+<tr><td><code>DrmSystemWidevine</code></td><td><code>drm_system_widevine.h/cc</code></td><td>Widevine CDM 适配器</td></tr>
+<tr><td><code>WidevineStorage</code></td><td><code>widevine_storage.h/cc</code></td><td>密钥持久化存储</td></tr>
+<tr><td><code>WidevineTimer</code></td><td><code>widevine_timer.h/cc</code></td><td>CDM 定时器</td></tr>
+</table>
+
+<h2>2. License 获取：完整的会话生命周期</h2>
+
+<p>从请求 License 到密钥就绪的完整流程：</p>
+
+<pre><code>--- drm_system_widevine.cc:980-1035, 1037-1067, 1114-1181 ---
+
+Cobalt EME                    DrmSystemWidevine               Widevine CDM        License Server
+    │                               │                             │                    │
+    │ GenerateSessionUpdateRequest  │                             │                    │
+    │──────────────────────────────→│                             │                    │
+    │                               │ createSession()             │                    │
+    │                               │────────────────────────────→│                    │
+    │                               │ generateRequest()           │                    │
+    │                               │────────────────────────────→│                    │
+    │                               │                             │                    │
+    │                               │ ← onMessage() ─────────────│                    │
+    │                               │   (kLicenseRequest)         │                    │
+    │  session_update_request_cb    │                             │                    │
+    │←──────────────────────────────│                             │                    │
+    │                               │                             │                    │
+    │  ← HTTP POST to license server─────────────────────────────────────────────────→│
+    │                               │                             │                    │
+    │  UpdateSession(response)      │                             │                    │
+    │──────────────────────────────→│                             │                    │
+    │                               │ update()                    │                    │
+    │                               │────────────────────────────→│                    │
+    │                               │                             │                    │
+    │                               │ ← onKeyStatusesChange() ───│                    │
+    │                               │   → OnAllKeysUpdated()      │                    │
+    │                               │     → SbEventSchedule()     │                    │
+    │                               │       → AnnounceKeys()      │                    │
+    │                               │         → observer-&gt;        │                    │
+    │                               │           OnKeyReady()      │                    │
+    │                               │                             │                    │
+    │ session_updated_callback      │                             │                    │
+    │←──────────────────────────────│                             │                    │
+</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 关键设计：延迟 AnnounceKeys</div>
+<code>OnAllKeysUpdated()</code> (第1082行) 不直接通知 Player，而是通过 <code>SbEventSchedule(AnnounceKeys, this, 0)</code> 在当前事件循环的下一 tick 执行。这确保了在所有密钥状态都更新完毕后再统一通知。
+</div>
+
+<h2>3. 初始化：一次性的 CDM 设置</h2>
+
+<pre><code>--- drm_system_widevine.cc:357-416 ---
+
+EnsureWidevineCdmIsInitialized(company_name, model_name)
+  static s_initialized = false
+  if s_initialized: return       ← 只执行一次
+
+  TryReadFromPropertiesFile()    ← 读取设备属性文件
+
+  // 配置 ClientInfo
+  client_info.product_name  = "WPEFramework"
+  client_info.company_name  = "www.metrological.com"
+  client_info.model_name    = "www"
+  client_info.device_name   = "Linux"
+
+  // 初始化 Widevine CDM
+  wv3cdm::initialize(wv3cdm::kOpaqueHandle, client_info,
+                     _storage, &s_clock, &s_timer, log_level)
+  s_initialized = true</code></pre>
+
+<p>初始化需要传入 4 个基础组件：</p>
+<table>
+<tr><th>组件</th><th>AML 实现</th><th>职责</th></tr>
+<tr><td><code>Cdm::IEventListener</code></td><td><code>DrmSystemWidevine</code> 自身</td><td>接收来自 CDM 的事件（onMessage, onKeyStatusesChange）</td></tr>
+<tr><td><code>WidevineStorage</code></td><td><code>widevine_storage.cc</code></td><td>持久化密钥到本地文件系统</td></tr>
+<tr><td><code>WidevineClock</code></td><td>内部类</td><td>CDM 时间查询接口</td></tr>
+<tr><td><code>WidevineTimer</code></td><td><code>widevine_timer.cc</code></td><td>基于 Starboard 事件的定时器</td></tr>
+</table>
+
+<h2>4. 解密路径</h2>
+
+<p>DrmSystemWidevine 有 <strong>两条解密路径</strong>，对应不同调用者：</p>
+
+<h3>4.1 Starboard 标准路径 (InputBuffer)</h3>
+<pre><code>--- drm_system_widevine.cc:975-978 ---
+
+SbDrmSystemPrivate::DecryptStatus DrmSystemWidevine::Decrypt(InputBuffer* buffer) {
+  return kSuccess;  // 空实现，不解密
+}</code></pre>
+
+<p>这是 Cobalt 上层期望的标准解密接口。在 AML 中是空实现——解密全部在 GstBuffer 路径中完成。</p>
+
+<p>为什么不能在 InputBuffer 路径中解密到 secmem？因为 <strong>InputBuffer 没有元数据系统</strong>：</p>
+
+<pre><code>GstBuffer                             InputBuffer
+├── data (内存)                       ├── data()  (内存指针)
+├── pts/dts                           ├── size()
+├── caps                              └── is_encrypted()
+└── metadata                  (没有扩展机制)
+      └── 可附着 secmem_handle
+
+gst_buffer_add_protection_meta()   （无类似接口）
+   ← GStreamer 设计时就支持的            ← 固定结构，不可扩展
+</code></pre>
+
+<p>即使 InputBuffer 能携带 secmem handle，下一层 <code>SbPlayerWriteSample</code> 的 <code>SbPlayerSampleInfo::buffer</code> 也是 <code>const void*</code>，同样没有传递 handle 的通道。这是 <strong>Starboard API 本身的设计限制</strong>——它假设数据流是"解密到普通内存 → 传给 player"的模型，不支持硬件安全内存路径。</p>
+
+<h3>4.2 GStreamer 路径 (GstBuffer)</h3>
+<pre><code>--- drm_system_widevine.cc:809-975 ---
+
+bool DrmSystemWidevine::Decrypt(id, GstBuffer* buffer,
+    GstBuffer* sub_sample, uint32_t sub_sample_count,
+    GstBuffer* iv, GstBuffer* key_id, GstCaps* caps,
+    encryption_scheme, encryption_pattern)
+
+  → DecryptImpl(id, buffer, subSample, subSampleCount,
+                IV, keyID, ..., patternCrypto, patternClear,
+                encryptScheme, caps)
+
+    → DecryViaWv(id, mediaType, subSampleMapping,
+                 sampleCnt, pbIV, cbIV, pbData, cbData,
+                 keyId, keyIdLen, ...,
+                 sec_handle)       ← secmem 句柄传递到 CDM</code></pre>
+
+<p><code>DecryViaWv()</code> (第664行) 是真正的硬件解密入口，它把 secmem handle 和加密数据传给 Widevine CDM，CDM 调用 TrustZone/硬件安全引擎完成 AES 解密。</p>
+
+<h2>5. Key Status 管理</h2>
+
+<pre><code>--- drm_system_widevine.cc:1069-1093 ---
+
+// CDM 回调 → 收集所有就绪密钥
+void OnAllKeysUpdated() {
+  cached_ready_keys_.clear();
+  if (event_id_ != kSbEventIdInvalid)
+    SbEventCancel(event_id_);
+  event_id_ = SbEventSchedule(AnnounceKeys, this, 0);
+}
+
+// 遍历所有观察者，通知每个就绪的 key
+void AnnounceKeys() {
+  auto ready_keys = GetReadyKeys();
+  for (auto* observer : observers_) {
+    for (auto& key : ready_keys) {
+      observer->OnKeyReady(key.data(), key.size());
+    }
+  }
+}</code></pre>
+
+<p>密钥状态通过 <code>session_keys_</code> (unordered_map&lt;session_id, KeysWithStatus&gt;) 管理，每种密钥状态包括：</p>
+<table>
+<tr><th>状态</th><th>含义</th></tr>
+<tr><td><code>kSbDrmKeyStatusUsable</code></td><td>密钥可用，可解密</td></tr>
+<tr><td><code>kSbDrmKeyStatusExpired</code></td><td>密钥过期</td></tr>
+<tr><td><code>kSbDrmKeyStatusPending</code></td><td>密钥请求中</td></tr>
+<tr><td><code>kSbDrmKeyStatusDownscaled</code></td><td>分辨率降级（如 HD→SD）</td></tr>
+<tr><td><code>kSbDrmKeyStatusError</code></td><td>密钥错误</td></tr>
+</table>
+
+<p>这里可以看到完整的 Observers 链：</p>
+<pre><code>Widevine CDM
+  → onKeyStatusesChange()
+    → DrmSystemWidevine::OnAllKeysUpdated()
+      → AnnounceKeys()
+        → observer-&gt;OnKeyReady()          ← PlayerImpl 就是 Observer
+          → pipeline post "key-status-change"
+            → HandleApplicationMessage()
+              → WritePendingSamples()
+                → DrmSystemWidevine::Decrypt()  ← GstBuffer 版本</code></pre>
+
+<h2>6. Observer 模式的双向通信</h2>
+
+<p>回顾 Lesson 1 的双向适配器模式，DRM 模块也采用同样的设计：</p>
+
+<div class="diagram">
+DrmSystemWidevine (Subject)         PlayerImpl (Observer)
+    │                                      │
+    │ ← Observer::OnKeyReady() ──────────│ 密钥就绪通知
+    │                                      │
+    │                                      │
+    │ Decrypt(buffer, session_id, ...) ──→│ Player 调用解密
+    │ ← kSuccess ─────────────────────────│
+</div>
+
+<p>与第一课的 PlatformEvent 模式不同的是，这里使用了<strong>显式的 Observer 注册</strong> (<code>AddObserver</code>/<code>RemoveObserver</code>)，由 PlayerImpl 在构造/析构时管理生命周期。</p>
+
+<h2>7. 动手练习</h2>
+<ol>
+  <li>在 <code>drm_system_widevine.cc</code> 中查找 <code>cached_ready_keys_</code> 的读写位置，理解密钥缓存的逻辑</li>
+  <li>找到 <code>DecryViaWv</code> 函数的 sec_handle 参数来源，确认它和第二课的 secmem allocator 的关系</li>
+  <li>查看 <code>TryReadFromPropertiesFile</code> 的实现，了解 AML 的 DRM 配置从哪儿读取</li>
+  <li>比较 <code>Decrypt(InputBuffer*)</code> 和 <code>Decrypt(GstBuffer*)</code> 的调用栈差异</li>
+</ol>
+
+<h2>8. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0002-player-module-deep-dive.html">第二课: Player 模块</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a></li>
+  <li>Widevine 官方文档: <a href="https://widevine.com/">widevine.com</a></li>
+</ul>
+
+<details>
+<summary>InputBuffer 和 GstBuffer 两条解密路径有什么不同？</summary>
+<div class="answer">
+
+<table>
+<tr><th></th><th>InputBuffer 路径</th><th>GstBuffer 路径</th></tr>
+<tr><td>调用者</td><td>Cobalt 上层媒体管线</td><td>PlayerImpl::WriteSample</td></tr>
+<tr><td>调用时机</td><td>SbPlayerWriteSample 之前</td><td>gst_app_src_push_buffer 之前</td></tr>
+<tr><td>数据载体</td><td>InputBuffer (固定结构)</td><td>GstBuffer (可扩展容器)</td></tr>
+<tr><td>元数据</td><td>无元数据系统</td><td>可附着 GstProtectionMeta, secmem handle</td></tr>
+<tr><td>解密输出</td><td>只能写到普通内存</td><td>可直接写到 secmem</td></tr>
+<tr><td>后续输出</td><td>SbPlayerWriteSample(const void*) — 无 handle 通道</td><td>gst_app_src_push_buffer — 直接推入 pipeline</td></tr>
+</table>
+
+<p>两条路径的本质差异在于 <strong>API 边界的设计粒度</strong>。Starboard 标准 API 的设计假设解密输出是普通内存，这个假设对纯软件解密场景够用，但对 secmem 这样的硬件安全内存根本不够。AML 的 GStreamer 路径绕过 API 边界，在 PlayerImpl 内部完整处理了"分配 secmem → 解密 → 推送"的闭环。</p>
+</div>
+</details>
+
+<details>
+<summary>为什么不扩展 InputBuffer 让它也能携带 secmem handle？</summary>
+<div class="answer">
+<p>技术上可以扩展 InputBuffer 或 SbPlayerSampleInfo 增加 metadata 字段。但问题是，即使 InputBuffer 能携带 secmem handle，<strong>谁来负责解密</strong>？</p>
+<p>标准路径中，解密是在 Cobalt 上层调用的 <code>Decrypt(InputBuffer*)</code> 中完成，然后 Cobalt 再调 <code>SbPlayerWriteSample</code>。要做到解密到 secmem，Cobalt 上层需要知道 secmem allocator、分配 secmem buffer、传递 handle——这些都超出了 Cobalt 的职责范围。</p>
+<p>而 AML 的路径把解密放在 PlayerImpl 中，PlayerImpl 持有 <code>allocator_</code> (secmem allocator) 和 <code>drm_system_</code> 的引用，天然有能力完成整条链路。这说明：<strong>硬件安全解密的控制权应该放在平台层</strong>，而不是在 Cobalt 上层。这恰恰符合 Starboard 的设计原则 #3 "Minimize the burden on the porter"——如果标准路径能处理，就无需 AML 另辟蹊径了。</p>
+</div>
+</details>
+
+<div class="footer">
+Lesson 0003 · 2026-06-15 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

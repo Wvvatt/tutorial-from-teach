@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0002: AML Player 模块深度解析</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem;
+  }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0002: AML Player 模块深度解析</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第二课</p>
+
+<p>第一课我们俯瞰了 AML Starboard 全景。这一课深入最核心的 <strong>Player</strong> 模块——媒体播放的核心引擎，也是 AML 移植中最大的模块（15 个文件，~2750 行）。</p>
+
+<h2>1. 架构概览：三层嵌套</h2>
+
+<p>AML Player 遵循 Starboard 的<strong>不透明句柄</strong> (Opaque Handle) 模式，外部通过 <code>SbPlayer</code> 句柄操作，内部有三层：</p>
+
+<div class="diagram">
+SbPlayer (不透明句柄, typedef SbPlayerPrivate*)
+  │
+  └── SbPlayerPrivate (player_internal.h)
+        ├── player_counter (最多支持 2 个并发播放器)
+        └── std::unique_ptr&lt;Player&gt; player_
+              │
+              └── PlayerImpl (内部匿名 namespace)
+                    ├── 继承 Player (虚接口: WriteSample, Seek, SetRate...)
+                    ├── 继承 DrmSystemWidevine::Observer
+                    ├── GStreamer pipeline (主数据处理)
+                    └── playback_thread (GMainLoop 事件循环)
+</div>
+
+<table>
+<tr><th>层</th><th>文件</th><th>职责</th></tr>
+<tr><td><code>SbPlayer</code> (C API)</td><td><code>player_create.cc</code> 等 14 个文件</td><td>Starboard 标准 API 实现，参数校验</td></tr>
+<tr><td><code>SbPlayerPrivate</code></td><td><code>player_internal.h</code></td><td>桥接层，实例化 PlayerImpl，跟踪播放器数量</td></tr>
+<tr><td><code>PlayerImpl</code></td><td><code>player_internal.cc</code> (内部类)</td><td>实际实现：GStreamer pipeline、DRM、缓冲管理</td></tr>
+</table>
+
+<div class="callout">
+<div class="callout-title">🔑 关键约束</div>
+<code>SbPlayerPrivate::number_of_players_</code> 限制最多 2 个并发播放器——用于支持主播放 + PIP（画中画）。
+</div>
+
+<h2>2. 播放器创建流程</h2>
+
+<p>从 <code>SbPlayerCreate</code> 到 GStreamer pipeline 的完整链路：</p>
+
+<pre><code>--- player_create.cc:31-83 / player_internal.cc:903-1220 ---
+
+SbPlayerCreate() →
+  check callbacks, codecs, output_mode
+  → SbPlayerPrivate::CreateInstance()
+    if (number_of_players_ >= 2) return nullptr;
+    → new PlayerImpl(this, ...)
+
+PlayerImpl() →
+  初始化 allocator_ (secmem, 如果 DRM)
+  解析 max_video_capabilities → pip_ (432x240@15)
+  构建 GStreamer pipeline 描述字符串
+  gst_parse_launch() 创建 pipeline
+  配置 appsrc (caps, callbacks, max-bytes)
+  配置 video/audio sink (low-memory, pip, wait-video)
+  安装 underflow 回调 + bus watch
+  ChangePipelineState(GST_STATE_READY)
+  创建 playback_thread → g_main_loop_run()</code></pre>
+
+<h2>3. GStreamer Pipeline 构建</h2>
+
+<p>构造函数中动态拼接 pipeline 字符串。关键逻辑按 codec 和 PIP 状态决定：</p>
+
+<pre><code>--- player_internal.cc:1011-1096 ---
+
+switch(video_codec):
+  H264:  h264parse      (clear)
+         h264secparse   (DRM)
+  H265:  h265parse
+  VP9/AV1: (由 secmem 处理)
+
+switch(audio_codec):
+  AAC:   aacparse ! avdec_aac
+  Opus:  opusdec
+  Vorbis: vorbisparse ! vorbisdec
+  AC3/EAC3: ac3parse
+
+COBALT_SET_VIDEOSINK:
+  amlvideosink | westerossink (默认)
+
+// pipeline 示例 (H264+AAC):
+appsrc name=my_vsrc ! h264parse ! westerossink name=my_vsink \
+appsrc name=my_asrc ! aacparse ! avdec_aac ! audioconvert ! \
+  audioresample ! amlhalasink name=my_asink
+</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 PIP 模式</div>
+当 <code>max_video_capabilities</code> 为 <code>"width=432; height=240; framerate=15;"</code> 时，启用 PIP 模式：
+<ul>
+  <li>只有视频，丢弃音频 (<code>audio_codec_ = kSbMediaAudioCodecNone</code>)</li>
+  <li>sink 名称后缀为 <code>-pip</code> 而非 <code>-mp</code></li>
+  <li>video sink 设置 <code>pip=TRUE</code>, <code>res-usage=0</code></li>
+  <li>audio sink 设置 <code>direct-mode=FALSE</code></li>
+</ul>
+</div>
+
+<h2>4. 数据流：WriteSample 完整路径</h2>
+
+<p>Cobalt 将编码后的音视频数据送下来时，经过以下流程：</p>
+
+<pre><code>--- player_write_sample.cc:30-35 / player_internal.cc:1847-2055,1609-1765 ---
+
+SbPlayerWriteSample2
+  → player_-&gt;WriteSample(sample_type, sample_infos, count)
+
+1. 分配 GstBuffer, 拷贝 Cobalt 数据
+2. 解析 DRM info (key, iv, subsamples)
+3. 检查 DRM key 是否就绪:
+   ├─ 未就绪 → 存为 PendingSample, 等待密钥回调后重放
+   └─ 就绪   → 继续
+
+4. 安全路径 (DRM + video):
+   ├─ gst_buffer_new_allocate(allocator_, size)  ← secmem 目标
+   ├─ gst_secmem_memory_get_handle(mem)          ← 硬件句柄
+   ├─ gst_buffer_add_protection_meta(buffer, ...)← 句柄挂到原始 buffer
+   └─ VP9/AV1: gst_secmem_parse_vp9/av1(mem)
+
+5. DRM 解密:
+   └─ drm_system_-&gt;Decrypt(session_id, buffer, ...)
+      解密引擎从 buffer (加密输入) 读取
+      解密后直接写入 secmem handle 指向的内存
+      (CPU 不可读, 只有硬件解码器可访问)
+
+6. gst_app_src_push_buffer(src, buffer2)  ← 推入已含解密数据的 secmem buffer
+
+7. 缓冲水位检查:
+   ├─ &gt; 5 秒 → 延迟 1 秒再请求
+   └─ &lt; 5 秒 → 立即 DecoderNeedsData()
+</code></pre>
+
+<h2>5. 状态机与线程模型</h2>
+
+<h3>5.1 播放器状态</h3>
+
+<pre><code>          ┌──────┐
+          │ kNull│  (初始)
+          └──┬───┘
+             │ Seek(0) / 首次数据
+             ▼
+     ┌───────────────┐
+     │ kInitial       │
+     │ kInitialPreroll│ ← 播放器线程设置
+     └───────┬───────┘
+             │ Pipeline PAUSED → ASYNC_DONE
+             ▼
+      ┌─────────────┐
+      │ kPresenting  │ ← 正常播放状态
+      └──────┬──────┘
+             │ Seek()
+             ▼
+      ┌──────────────────┐
+      │ kPrerollAfterSeek│ ← 跳转后预滚
+      └──────────────────┘
+</code></pre>
+
+<h3>5.2 双线程架构</h3>
+
+<table>
+<tr><th>线程</th><th>用途</th><th>关键资源</th></tr>
+<tr><td><strong>Cobalt 主线程</strong></td><td>调用 SbPlayer API (Create, WriteSample, Seek, SetRate...)</td><td>mutex_ 保护状态</td></tr>
+<tr><td><strong>playback_thread</strong></td><td>GMainLoop 事件循环（处理 GST bus 消息、定时器、任务调度）</td><td>main_loop_ / main_loop_context_</td></tr>
+</table>
+
+<p>线程间通信通过 <code>DispatchOnWorkerThread(Task*)</code>：</p>
+<pre><code>--- player_internal.cc:1459-1476 ---
+
+void DispatchOnWorkerThread(Task* task) const {
+  GSource* src = g_source_new(&amp;SourceFunctions, sizeof(GSource));
+  g_source_set_ready_time(src, 0);
+  g_source_set_callback(src, [](gpointer d) {
+    static_cast&lt;DispatchData*&gt;(d)-&gt;task()-&gt;Do();
+    return G_SOURCE_REMOVE;
+  }, data, ...);
+  g_source_attach(src, main_loop_context_);
+}</code></pre>
+
+<p>任务类型：<code>PlayerStatusTask</code>、<code>DecoderStatusTask</code>、<code>PlayerErrorTask</code>、<code>PlayerDestroyedTask</code> (424-547)</p>
+
+<h2>6. 缓冲管理</h2>
+
+<p>PlayerImpl 实现了主动缓冲管理，通过定时轮询和 underflow 回调维护播放流畅性：</p>
+
+<h3>6.1 Underflow 处理</h3>
+<p>当 GStreamer video/audio sink 内部数据不足时触发 <code>videoUnderFlowCallback</code> / <code>audioUnderFlowCallback</code>，回调调用 <code>ProcessUnderflow()</code> 暂停 pipeline：</p>
+<pre><code>--- player_internal.cc:316-350 (callbacks), 2232-2255 (ProcessUnderflow) ---
+
+void ProcessUnderflow() {
+  if (not EOS, and not enough data) {
+    ChangePipelineState(GST_STATE_PAUSED);
+    pipeline_is_paused_internal_ = true;
+  }
+}</code></pre>
+
+<h3>6.2 缓冲水位监控 (CheckVideoBufferHealth)</h3>
+<p>从 pipeline 进入 PAUSED 状态后，每 80ms 轮询一次（可被 <code>BUFFERING_POLLING_INTERVAL</code> 环境变量覆盖）：</p>
+<table>
+<tr><th>关键阈值</th><th>值</th><th>说明</th></tr>
+<tr><td><code>MIN_VIDEO_BUFFER_TIME</code></td><td>250ms</td><td>低于此值→暂停（数据跟不上）</td></tr>
+<tr><td><code>MIN_AUDIO_BUFFER_TIME</code></td><td>250ms</td><td>同上，音频</td></tr>
+<tr><td><code>ENOUGH_VIDEO_BUFFER_TIME</code></td><td>2000ms</td><td>达到此值→恢复播放</td></tr>
+<tr><td><code>ENOUGH_AUDIO_BUFFER_TIME</code></td><td>900ms</td><td>达到此值→恢复播放</td></tr>
+</table>
+
+<h2>7. DRM 集成与 PendingSample 机制</h2>
+
+<p>加密内容的播放需要一个关键机制：<strong>密钥可能比样本到得晚</strong>。</p>
+
+<pre><code>--- player_internal.cc:2029-2041, 2532-2543, 2545-2576 ---
+
+// 当 DRM key 未就绪时
+if (session_id.empty()) {
+  PendingSample ps(sample_type, buffer, iv, subsamples, ...);
+  pending_samples_[key_str].push_back(ps);
+  return;  // 等待密钥
+}
+
+// 当密钥就绪时
+void OnKeyReady(key, key_len) {
+  // 往 pipeline 发 "key-status-change" 消息
+  // → HandleApplicationMessage() → WritePendingSamples()
+}
+
+// 重放挂起的样本
+WritePendingSamples() {
+  sort(按 serial 排序);
+  for (每个 pending sample) {
+    WriteSample(type, buffer, session_id, ...);  // 密钥已就绪
+  }
+}</code></pre>
+
+<p>密钥就绪有两个来源：</p>
+<ol>
+  <li><strong>DrmSystemWidevine 回调</strong> → <code>OnKeyReady()</code> → pipeline 消息</li>
+  <li><strong>WriteSample 时发现密钥已就绪</strong> → 先 <code>WritePendingSamples</code> 再写当前样本</li>
+</ol>
+
+<h2>8. ForceStop — 急停机制</h2>
+
+<p>当 Application 收到 Freeze 事件时（例如 HDMI 拔出、HDCP 失败），调用 <code>player::ForceStop()</code>：</p>
+<pre><code>--- player_internal.cc:881-898 (PlayerRegistry), 2680-2684 (ForceStop) ---
+
+ForceStop()
+  → 遍历所有 PlayerImpl, 获取 pipeline
+  → 每个 pipeline 发送 "force-stop" 应用消息
+     → HandleApplicationMessage():
+         force_stop_ = true;
+         ChangePipelineState(GST_STATE_READY);  // 立即停止
+}</code></pre>
+
+<h2>9. 动手练习</h2>
+<ol>
+  <li>在 <code>player_internal.cc:977-989</code> 找到 secmem allocator 创建代码，了解哪些 codec 使用哪种 secmem 格式</li>
+  <li>追踪 <code>DecoderNeedsData</code> 在 <code>player_internal.cc</code> 中的调用链（搜索 <code>DecoderNeedsData</code>）</li>
+  <li>找到 <code>pipeline_is_paused_internal_</code> 的所有读写位置（6处），理解内部暂停机制</li>
+  <li>查看 <code>CheckVideoBufferHealth</code> (:2273-2381)，理解 buffering 不足时如何请求更多数据</li>
+</ol>
+
+<h2>10. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: AML Starboard 架构导览</a></li>
+  <li><code>starboard/player.h</code> — Starboard Player API 定义</li>
+  <li>GStreamer 文档: <a href="https://gstreamer.freedesktop.org/documentation/">gstreamer.freedesktop.org</a></li>
+</ul>
+
+<div class="callout">
+<div class="callout-title">💡 思考题</div>
+为什么 AML 的 PlayerImpl 继承了 <code>DrmSystemWidevine::Observer</code>，却没有直接使用它的 <code>OnKeyReady</code> 来处理 pending samples，而是通过 GStreamer pipeline 应用消息间接调用？这背后有什么设计考量？
+</div>
+
+<details>
+<summary>点击查看答案</summary>
+<div class="answer">
+<p><strong>核心原因：线程安全</strong></p>
+<p><code>OnKeyReady()</code> 从 Widevine CDM 的回调线程调用。如果直接在里面调用 <code>WritePendingSamples()</code>，需要手动加锁保护所有 GStreamer 操作（<code>gst_app_src_push_buffer</code>、<code>Decrypt</code> 等），容易死锁或漏锁。</p>
+<p>通过 GStreamer bus 发送应用消息：</p>
+<ul>
+  <li>自然切换到 <strong>playback_thread</strong>（GMainLoop 所在线程）执行</li>
+  <li>与 pipeline 其他消息（state-changed、EOS、error）<strong>按顺序序列化处理</strong></li>
+  <li>这是 GStreamer 的<strong>标准线程间通信模式</strong></li>
+</ul>
+</div>
+</details>
+
+<div class="footer">
+Lesson 0002 · 2026-06-15 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

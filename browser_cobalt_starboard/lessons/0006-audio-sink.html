@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0006: Audio Sink — GStreamer 音频输出</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0006: Audio Sink — GStreamer 音频输出</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第六课</p>
+
+<p>第二课讨论了 Player 模块——处理编码的音视频数据。但 Cobalt 还有另一条独立的音频路径：<strong>Audio Sink</strong>。它负责将解码后的 PCM 音频数据输出到硬件，用于 UI 音效、Web Audio 等非媒体播放场景。这是与 Player pipeline 完全分离的独立 audiosink pipeline。</p>
+
+<h2>1. 架构概览</h2>
+
+<p>Audio Sink 遵循 Starboard 的 <strong>Type 模式</strong>——一个平台可以注册多种 audio sink 实现（当前只注册一种 GStreamer 实现）：</p>
+
+<div class="diagram">
+SbAudioSinkPrivate (Starboard 私有层)
+    │
+    ├── Type (工厂抽象)
+    │     └── GStreamerAudioSinkType ← 实现 Create/IsValid/Destroy
+    │
+    └── SbAudioSinkPrivate instance
+          └── GStreamerAudioSink   ← 内部匿名 namespace 类
+                ├── GStreamer pipeline (appsrc → convert → resample → queue → sink)
+                ├── audio_loop_thread (GMainLoop)
+                └── frame_buffers (Cobalt 提供的 PCM 帧缓冲环)
+</div>
+
+<h2>2. 平台初始化</h2>
+
+<p>与 Player 不同，Audio Sink 需要显式初始化。这是在 Application 构造函数中完成的（Lesson 1 见过）：</p>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:507-511, application_aml.cc:173 ---
+
+void SbAudioSinkPrivate::PlatformInitialize() {
+  auto* sink_type = GStreamerAudioSinkType::CreateInstance();
+  SetPrimaryType(sink_type);          ← 注册为默认 audio sink
+  EnableFallbackToStub();             ← 失败时回退到 stub 实现
+}
+
+void SbAudioSinkPrivate::PlatformTearDown() {   // application_aml.cc:178
+  auto* sink_type = GetPrimaryType();
+  SetPrimaryType(NULL);
+  GStreamerAudioSinkType::DestroyInstance(sink_type);
+}</code></pre>
+
+<h2>3. GStreamer Pipeline 构建</h2>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:132-223 ---
+
+GStreamerAudioSink 构造函数:
+
+  1. 创建 audio caps: "audio/x-raw, format=S16LE|F32LE, rate=48000, channels=2"
+  2. 创建 appsrc (命名 "source")
+     → gst_app_src_set_max_bytes(1024 * bytes_per_frame)
+  3. 创建 audio sink:
+     固定 amlhalasink (direct-mode=FALSE)   ← Audio Sink 不同于 Player
+  4. 构建 pipeline:
+     appsrc → audioconvert → audioresample → queue → amlhalasink
+  5. gst_element_set_state(GST_STATE_PLAYING)   ← 直接设为 PLAYING
+  6. 创建 audio_loop_thread → g_main_loop_run()</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 Audio Sink 与 Player 的关键区别</div>
+<ul>
+  <li><strong>独立 pipeline</strong> — 不共享 Player 的 pipeline</li>
+  <li><strong>无编解码</strong> — 只有格式转换 (audioconvert/resample)，不需要 parser/decoder</li>
+  <li><strong>直接 PLAYING</strong> — 创建后立即设为 PLAYING 状态（无 preroll 过程）</li>
+  <li><strong>无 DRM</strong> — 音频 sink 处理的是已解密的 PCM 数据</li>
+</ul>
+</div>
+
+<h2>4. 数据流：从 Cobalt 帧缓冲到硬件</h2>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:341-448 ---
+
+AppSrcNeedData (GStreamer appsrc need-data 回调):
+
+  while (!enough_data_ && !destroying_):
+    │
+    │  update_source_status_func_(&frames_in_buffer, &offset, &is_playing, &eos)
+    │  ← Cobalt 告知当前帧缓冲环中有多少帧、从哪个偏移开始
+    │
+    │  frames_to_write = min(1024, frames_in_buffer, ring_buffer_remaining)
+    │
+    │  if (is_playing && frames_to_write > 0):
+    │    │
+    │    │  1. gst_buffer_new_allocate(nullptr, frames_to_write * bytes_per_frame)
+    │    │  2. gst_buffer_fill(buffer, 0, frame_buffers[0] + offset, size)
+    │    │     ← 从 Cobalt 帧缓冲环拷贝 PCM 数据到 GstBuffer
+    │    │  3. GST_BUFFER_TIMESTAMP = total_frames * SECOND / sample_rate
+    │    │  4. gst_app_src_push_buffer(appsrc, buffer)
+    │    │  5. consume_frame_func_(frames_to_write, ...)  ← 通知 Cobalt 已消费
+    │    │
+    │  if (!is_playing || frames_in_buffer <= 0):
+    │    SbThreadSleep(5ms)  ← 没有数据时等待</code></pre>
+
+<p>数据来源是 Cobalt 的 <strong>frame_buffers</strong>——一片环形缓冲区，由 Cobalt 上层往里面填 PCM 数据，audiosink 从中消费。</p>
+
+<h2>5. 线程模型</h2>
+
+<p>Audio Sink 有自己的 <strong>audio_loop_thread</strong> + 独立的 GMainLoop：</p>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:267-276 ---
+
+AudioThreadEntryPoint:
+  g_main_context_push_thread_default(main_loop_context_)
+  g_main_loop_run(mainloop_)
+
+// appsrc need-data 回调在这个线程中执行
+// bus message 回调也在这个线程中执行
+// 整个 GStreamer audiosink pipeline 只在这个线程上运行</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 总共多少线程？</div>
+回顾第二课：Player 有自己的 playback_thread + GMainLoop。所以：
+<ul>
+  <li>Cobalt 主线程</li>
+  <li>Player playback_thread (1 个或 PIP 时 2 个)</li>
+  <li>Audio Sink audio_loop_thread (1 个)</li>
+</ul>
+总共 3-4 个线程，每个有独立的 GMainLoop。
+</div>
+
+<h2>6. 销毁序列</h2>
+
+<p>销毁过程需要等待 <code>appsrc_exit_</code> 标志——这是典型的优雅退出：</p>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:225-264 ---
+
+~GStreamerAudioSink():
+  1. 设置 destroying_ = true
+  2. gst_app_src_set_max_bytes(appsrc, 1)  ← 唤醒可能阻塞等待的 appsrc
+  3. while (!appsrc_exit_) SbThreadSleep(5ms)
+     等待 appsrc need-data 回调退出（appsrc_exit_ 在回调中设为 true）
+  4. 超时 1 秒后退出 mainloop
+  5. SbThreadJoin(audio_loop_thread_)
+  6. 清理 GStreamer 资源</code></pre>
+
+<h2>7. DUMP_PCM_TO_FILE — 内嵌调试功能</h2>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:420-440 ---
+
+#if defined(DUMP_PCM_TO_FILE)
+  SbFile file = SbFileOpen("/tmp/sound{timestamp}.pcm",
+                           kSbFileOpenAlways | kSbFileWrite, ...);
+  SbFileSeek(file, kSbFileFromEnd, 0);
+  SbFileWrite(file, frame_buffers[0] + offset, frames_to_write * bytes);
+#endif</code></pre>
+
+<p>编译时开启后，所有推到 audiosink 的 PCM 数据都会被写入 <code>/tmp/sound*.pcm</code> 文件。这是嵌入式开发中常用的原始音频调试手段——可以在 PC 上用 <code>ffplay -f s16le -ar 48000 -ac 2 /tmp/sound*.pcm</code> 回放。</p>
+
+<h2>8. AutoAudioSinkChildAddedCallback</h2>
+
+<pre><code>--- gstreamer_audio_sink_type.cc:460-477 ---
+
+当 amlhalasink 内部创建子 element 时:
+  if (子 element 是 GST_AUDIO_BASE_SINK):
+    g_object_set(sink, "buffer-time", 50ms)
+    g_object_set(queue, "min-threshold-time", 50ms * 1000ns)</code></pre>
+
+<p>这是为低延迟音频优化的——50ms 的 buffer-time 和 min-threshold-time，平衡了延迟和抗卡顿。</p>
+
+<h2>9. 动手练习</h2>
+<ol>
+  <li>在 <code>gstreamer_audio_sink_type.cc</code> 中对比 Audio Sink pipeline 和 Player pipeline (Lesson 2) 的差异</li>
+  <li>找到 <code>consume_frame_func_()</code> 的调用，理解 AUDIO → 帧缓冲环的同步机制</li>
+  <li>查看 <code>audio_sink_is_audio_sample_type_supported.cc</code>，了解 AML 支持的音频采样格式</li>
+  <li>如果开启 DUMP_PCM_TO_FILE，用 ffplay 回放验证音频数据是否正确</li>
+</ol>
+
+<h2>10. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0002-player-module-deep-dive.html">第二课: Player 模块</a> (Player pipeline 对比)</li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (Application 初始化 Audio Sink)</li>
+</ul>
+
+<div class="footer">
+Lesson 0006 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

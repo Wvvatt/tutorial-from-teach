@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0001: AML Starboard 架构导览</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+    color: #111;
+  }
+  .subtitle {
+    font-size: 1rem;
+    color: #666;
+    margin-bottom: 2rem;
+    border-bottom: 2px solid #e5e7eb;
+    padding-bottom: 1rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+    color: #2563eb;
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-top: 1.8rem;
+    margin-bottom: 0.6rem;
+    color: #1a1a2e;
+  }
+  p, li { color: #374151; }
+  p { margin-bottom: 1rem; }
+  ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+  li { margin-bottom: 0.3rem; }
+
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.85rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 1rem 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 1rem 1.2rem;
+    margin: 1.5rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.3rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .ref { color: #888; font-size: 0.85rem; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+    font-size: 0.9rem;
+    color: #888;
+    text-align: center;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    border: 1px solid #e5e7eb;
+    padding: 0.5rem 0.8rem;
+    text-align: left;
+  }
+  th { background: #f8fafc; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0001: AML Starboard 架构导览</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第一课</p>
+
+<p>欢迎！本课将带你完成对 AML (Amlogic) Starboard 移植代码的一次完整漫步。结束时，你将对整个代码库的布局、各模块职责、以及一条请求从 Cobalt 进入硬件的路径有清晰的认识。</p>
+
+<h2>1. 什么是 Starboard？</h2>
+<p>Starboard 是 Cobalt 的<strong>平台抽象层</strong> (Porting Layer / OS Abstraction)。它的核心思想是：Cobalt（一个运行 YouTube 等应用的运行时）只通过 Starboard API 与底层平台交互，平台只需要实现这些 API 即可运行 Cobalt。</p>
+
+<div class="callout">
+<div class="callout-title">Design Principle #1</div>
+"Make APIs sufficient but minimally so" — Starboard 只提供必要的 API，任何可以在 Starboard 之上实现的功能都不应该进入 API。
+</div>
+
+<p>Starboard 定义了约 30 个模块的 API（从 Configuration、Memory、Thread，到 Media、Player、DRM）。每个平台需要实现所有这些 API。</p>
+
+<h2>2. AML Starboard 移植全景</h2>
+
+<p>AML 的移植代码位于 <code>third_party/starboard/aml/</code>，遵循上游推荐的第三方移植结构。</p>
+
+<div class="diagram">
+third_party/starboard/aml/
+├── shared/          ← 所有架构共享的代码
+│   ├── aml_platform.h/cc    Platform Services (设备信息, 网络, 语音, HDCP, CEC)
+│   ├── application_aml.h/cc 应用主循环 + ESSOS 集成
+│   ├── main.cc              入口点 (main 函数)
+│   ├── player/              播放器实现 (15 文件)
+│   ├── media/               媒体能力查询 (19 文件)
+│   ├── widevine/             DRM 内容保护
+│   ├── audio_sink/           GStreamer 音频输出
+│   ├── microphone/           麦克风驱动
+│   ├── window/               窗口管理
+│   ├── speech/               TTS 语音合成
+│   ├── signal/               Freeze 信号处理
+│   └── system/               系统属性, 扩展, 路径
+│
+├── arm/              ← ARM 32-bit 平台配置
+│   ├── platform_configuration/
+│   ├── toolchain/
+│   └── configuration_public.h, atomic_public.h, ...
+│
+└── arm64/            ← ARM 64-bit 平台配置
+    └── (同上结构)
+</div>
+
+<h3>shared/ 目录模块详解</h3>
+
+<table>
+<tr><th>模块</th><th>文件数</th><th>职责</th></tr>
+<tr><td><code>player/</code></td><td>15</td><td>核心播放器 API 实现：创建/销毁/Seek/WriteSample/SetVolume 等</td></tr>
+<tr><td><code>media/</code></td><td>19</td><td>媒体能力检测：编解码器支持、缓冲区配置、输出保护</td></tr>
+<tr><td><code>widevine/</code></td><td>7</td><td>Widevine DRM 系统：会话管理、许可证、密钥存储</td></tr>
+<tr><td><code>audio_sink/</code></td><td>3</td><td>GStreamer 音频输出管道</td></tr>
+<tr><td><code>microphone/</code></td><td>8</td><td>语音输入支持</td></tr>
+<tr><td><code>speech/</code></td><td>4</td><td>TTS 语音合成</td></tr>
+<tr><td><code>system/</code></td><td>11</td><td>系统属性、CPU 特性、路径、扩展接口</td></tr>
+<tr><td><code>window/</code></td><td>6</td><td>窗口创建/销毁/尺寸查询</td></tr>
+<tr><td><code>signal/</code></td><td>1</td><td>SystemRequestFreeze</td></tr>
+</table>
+
+<div class="callout">
+<div class="callout-title">📖 术语表</div>
+遇到不熟悉的术语？请参考 <a href="../reference/glossary.html">Glossary / 术语表</a>。
+</div>
+
+<h2>3. 启动流程：从 main() 到应用循环</h2>
+
+<p>一切从 <code>main.cc</code> 开始。来看 AML 的入口：</p>
+
+<pre><code>int main(int argc, char** argv) {
+  tzset();                                    // 设置时区
+  gst_init_check(NULL, NULL, &error);         // 初始化 GStreamer
+  InstallCrashSignalHandlers();               // 安装崩溃信号处理
+  InstallDebugSignalHandlers();               // 安装调试信号
+  InstallSuspendSignalHandlers();             // 安装挂起信号
+
+  // AML Application 对象——核心主循环
+  third_party::starboard::aml::shared::Application application;
+  int result = application.Run(argc, argv);   // 进入事件循环
+  return result;
+}</code></pre>
+
+<p>关键观察：</p>
+<ul>
+  <li><strong>GStreamer 初始化</strong>在 main() 最开头 — 媒体管道是 AML 平台的核心依赖</li>
+  <li><strong>Application</strong> 继承自 <code>QueueApplication</code>，这是 Starboard 的标准事件队列抽象</li>
+  <li><code>application.Run()</code> 进入事件循环，处理系统事件（ESSOS 键盘/鼠标）、Starboard 事件、定时器等</li>
+</ul>
+
+<h2>4. AML 特有的核心组件</h2>
+
+<h3>4.1 ESSOS — 图形与输入系统</h3>
+<p>ESSOS (Ess OS) 是 Amlogic 的窗口和输入系统。AML 的 <code>Application</code> 类封装了 ESSOS 上下文：</p>
+<pre><code>class Application : public QueueApplication {
+  EssCtx *ctx_;              // ESSOS 上下文
+  NativeWindowType native_window_;
+  std::unique_ptr&lt;EssInput&gt; input_handler_;
+
+  // ESSOS 回调
+  void OnKeyPressed(unsigned int key);
+  void OnKeyReleased(unsigned int key);
+  void OnPointerMotion(unsigned int x, unsigned int y);
+  void OnDisplaySize(int width, int height);
+};</code></pre>
+<p>ESSOS 提供键盘、指针事件回调，以及窗口创建。AML 将这些事件转换为 Starboard <code>SbInputData</code> 事件注入应用循环。</p>
+
+<h3>4.2 Amlogic::Platform — 设备服务框架</h3>
+<p><code>aml_platform.h</code> 中定义了一套基于事件订阅的架构：</p>
+<ul>
+  <li><strong>DeviceInfoService</strong> — 设备信息（分辨率、HDR支持、屏幕尺寸）</li>
+  <li><strong>NetworkService</strong> — 网络状态检测（有线/无线、连接状态）</li>
+  <li><strong>VoiceInputService</strong> — 语音输入（支持蓝牙和麦克风两种模式）</li>
+  <li><strong>HdcpService</strong> — HDMI HDCP 状态监控（非 TV 平台）</li>
+  <li><strong>CecEventHandle</strong> — HDMI CEC 远程控制（非 TV 平台）</li>
+</ul>
+<p>所有服务都继承自 <code>Amlogic::Platform::PlatformEvent::Subscriber</code>，通过统一的事件总线接收通知。</p>
+
+<h3>4.2.1 双向适配器模式</h3>
+
+<p>每个 Service 和 Application 之间是<strong>双向通信</strong>的，这是理解 AML 平台架构的关键：</p>
+
+<div class="diagram">
+         ═══════════════════════════════════════
+         │         PlatformEvent                 │
+         │        (事件总线)                      │
+         ═══════════════════════════════════════
+              ↑  onEvent()        ↓ subscribe()
+              │                   │
+         ┌────┴─────┐      ┌──────┴──────┐
+         │ Service  │◄────►│ Application │
+         │ (Subscriber)    │             │
+         └──────────┘      └─────────────┘
+              ↑                    ↑
+         "反向路径"           "正向路径"
+         Service 收到事件     Application 主动查询
+         后回调 Application    Service 的状态
+</div>
+
+<p><strong>正向路径 (Application → Service)：</strong> Application 需要查询设备信息时，主动调用 Service 的接口：</p>
+<pre><code>// Application 查询设备信息
+ResolutionInfo Application::GetDisplayResolution() {
+  return DeviceInfoService::Instance()-&gt;getResolution();
+}
+bool Application::DisplayHasHDRSupport() {
+  return DeviceInfoService::Instance()-&gt;hasHDRSupport();
+}
+float Application::GetDisplayDiagonalSizeInInches() {
+  return DeviceInfoService::Instance()-&gt;getDiagonalSizeInInches();
+}</code></pre>
+
+<p><strong>反向路径 (Service → Application)：</strong> Service 收到 PlatformEvent 后，反过来调用 Application 注入 Starboard 事件：</p>
+<pre><code>// DeviceInfoService: 分辨率变化 → 通知 Application
+void DeviceInfoService::onDrmEvent(Event *e) {
+  if (e-&gt;getType() == UEvent::EVENT_RESOLUTION_CHANGED) {
+    Application::Get()-&gt;DisplayInfoChanged();
+  }
+}
+
+// NetworkService: 网络状态变化 → Application 注入连接事件
+void NetworkService::onEvent(Event *event) {
+  if (e-&gt;getType() == NetEvent::EVENT_INTERFACE_CONNECTION_STATUS) {
+    m_connectStatus = e-&gt;status;
+    if (e-&gt;status)
+      Application::Get()-&gt;SendNetworkConnectEvent();
+    else
+      Application::Get()-&gt;SendNetworkDisconnectEvent();
+  }
+}
+
+// HdcpService: HDCP 失败 → Application 发送 Freeze 事件
+void HdcpService::statusUpdate(Event *e) {
+  Drm::getHdcpStatus(status);
+  bool hdcpOk = (status.auth.hdcp1x | status.auth.hdcp2x);
+  SetFreeze(!hdcpOk);  // 不保护内容时冻结应用
+}</code></pre>
+
+<p>从设计模式角度看，这是 <strong>Observer + Adapter 的组合</strong>：</p>
+<table>
+<tr><th>方向</th><th>模式</th><th>输入</th><th>输出</th><th>适配方式</th></tr>
+<tr><td>正向</td><td>Adapter</td><td>Starboard API 调用</td><td>Amlogic 平台 API</td><td>同步查询适配</td></tr>
+<tr><td>反向</td><td>Observer</td><td>Amlogic 平台事件</td><td>Starboard Application 事件</td><td>异步回调适配</td></tr>
+</table>
+
+<p>这也是为什么每个 Service 同时有 <code>onEvent()</code>（Observer 接口）和 <code>getResolution()</code> 之类的查询方法（Adapter 接口）—— 两套接口对应两个方向的适配需求。</p>
+
+<h3>4.3 GStreamer 媒体管线</h3>
+<p>AML 的媒体实现深度绑定 GStreamer：</p>
+<ul>
+  <li><code>player_internal.cc</code> — 播放器使用 GStreamer pipeline</li>
+  <li><code>gst_media_utils.cc</code> — 编解码器能力检测</li>
+  <li><code>gstreamer_audio_sink_type.cc</code> — 音频输出基于 GStreamer</li>
+  <li>依赖：<code>gstreamer-1.0</code>, <code>gstreamer-app-1.0</code>, <code>gstreamer-video-1.0</code>, <code>gstreamer-audio-1.0</code></li>
+  <li>额外库：<code>gstsecmemallocator</code>（安全内存分配器）、<code>secmem</code></li>
+</ul>
+
+<h3>4.4 Widevine DRM</h3>
+<p>AML 实现了完整的 Widevine DRM 栈：</p>
+<ul>
+  <li><code>drm_system_widevine.h/cc</code> — Widevine CDM (Content Decryption Module) 集成</li>
+  <li><code>widevine_storage.h/cc</code> — 持久化密钥存储</li>
+  <li><code>widevine_timer.h/cc</code> — DRM 相关的定时器</li>
+  <li><code>drm_create_system.cc</code> — DRM 系统工厂</li>
+  <li>依赖 <code>widevine_ce_cdm_shared</code> 库</li>
+</ul>
+
+<h2>5. 一次播放请求的完整路径</h2>
+
+<p>从用户点击视频到硬件解码器，经过的关键层：</p>
+
+<div class="diagram">
+Cobalt Application
+    ↓
+Starboard API (SbPlayerCreate, SbPlayerWriteSample, ...)
+    ↓
+AML Starboard Implementation
+    ├── player/player_create.cc          → 创建 GStreamer pipeline
+    ├── player/player_write_sample.cc    → 将样本送入 pipeline
+    ├── player/player_seek.cc            → Seek 操作
+    └── player/player_internal.cc        → Pipeline 状态管理
+    ↓
+GStreamer Pipeline (src elements, decoder, sink)
+    ├── amlhalasink (Amlogic HW video decoder)
+    └── gstreamer_audio_sink_type.cc (音频输出)
+    ↓
+DRM Path (if encrypted):
+    └── widevine/drm_system_widevine.cc  → 解密 → secmem → decoder
+    ↓
+Kernel Drivers (V4L2, ALSA, DRM/KMS)
+    ↓
+Amlogic SoC Hardware
+</div>
+
+<h2>6. Build System</h2>
+
+<p>AML 移植使用 GN 构建系统。核心在 <code>BUILD.gn</code>：</p>
+<ul>
+  <li>定义 <code>starboard_platform</code> 静态库，汇集所有源文件</li>
+  <li>通过 <code>pkg_config</code> 引入 GStreamer 和 WPEFramework 依赖</li>
+  <li>通过参数 <code>video_resolution</code> 控制支持的分辨率（720p/1080p/2160p）</li>
+  <li>通过参数 <code>is_tv_platform</code> 区分 TV 和 non-TV 平台（影响 HDCP/CEC）</li>
+  <li>支持 Evergreen 模式（当 <code>sb_is_evergreen_compatible</code> 启用）</li>
+</ul>
+
+<h2>7. 动手练习</h2>
+
+<p>花 5 分钟做以下练习来巩固记忆：</p>
+
+<ol>
+  <li>打开 <code>third_party/starboard/aml/shared/main.cc</code> — 找到 GStreamer 初始化在哪一行</li>
+  <li>打开 <code>third_party/starboard/aml/shared/application_aml.h</code> — 数一数 Application 类处理了多少种事件</li>
+  <li>打开 <code>third_party/starboard/aml/shared/BUILD.gn</code> — 找到 <code>video_resolution</code> 定义在哪</li>
+  <li>打开 <code>third_party/starboard/aml/shared/player/player_internal.h</code> — 了解播放器的内部状态</li>
+</ol>
+
+<h2>8. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/glossary.html">术语表</a> — 遇到新术语时查阅</li>
+  <li><code>~/Code/cobalt/starboard/doc/principles.md</code> — Starboard 11 个目标和 8 个设计原则</li>
+  <li><code>~/Code/cobalt/starboard/README.md</code> — 官方移植指南</li>
+</ul>
+
+<div class="callout">
+<div class="callout-title">💡 下一步</div>
+有任何不清楚的地方？问你的 AI 老师。准备好后，我们可以进入第二课：深入 Player 模块的实现细节。
+</div>
+
+<div class="footer">
+Lesson 0001 · 2026-06-15 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

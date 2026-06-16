@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AML Starboard 术语表</title>
+<style>
+  @page { size: A4; margin: 2cm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Noto Sans SC", "Source Han Sans SC", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+    color: #333;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+  h1 { font-size: 1.8rem; border-bottom: 3px solid #2563eb; padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: #1a1a2e; }
+  h2 { font-size: 1.3rem; margin-top: 2rem; margin-bottom: 0.8rem; color: #2563eb; border-left: 4px solid #2563eb; padding-left: 0.8rem; }
+  dl { margin: 1rem 0; }
+  dt { font-weight: 600; color: #1a1a2e; margin-top: 1rem; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 4px; font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.95rem; }
+  dd { margin: 0.3rem 0 0.3rem 1.5rem; padding: 0.3rem 0.6rem; color: #444; }
+  .english { color: #666; font-size: 0.85rem; }
+  .tag { display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 10px; margin-left: 0.5rem; }
+  .tag-core { background: #dbeafe; color: #1e40af; }
+  .tag-aml { background: #dcfce7; color: #166534; }
+  .tag-media { background: #fce7f3; color: #9d174d; }
+  .tag-system { background: #f3e8ff; color: #6b21a8; }
+  .tag-ref { color: #888; font-size: 0.8rem; margin-left: 0.3rem; }
+  hr { margin: 2rem 0; border: none; border-top: 1px solid #e5e7eb; }
+  @media print { body { font-size: 12px; padding: 0; } }
+</style>
+</head>
+<body>
+
+<h1>AML Starboard 术语表</h1>
+
+<h2>Starboard 核心概念</h2>
+
+<dl>
+  <dt>Starboard <span class="tag tag-core">CORE</span></dt>
+  <dd>Cobalt 的平台抽象层 (Porting Layer / OS Abstraction)。封装了Cobalt所需的所有平台特定功能。每个平台需要实现 Starboard API 才能运行 Cobalt。</dd>
+
+  <dt>NPLB <span class="tag tag-core">CORE</span></dt>
+  <dd>"No Platform Left Behind" — Starboard 的平台验证测试套件。每个移植必须通过 NPLB 测试以确保 API 实现正确。<span class="tag-ref">`starboard/nplb/`</span></dd>
+
+  <dt>Starboard ABI (SABI) <span class="tag tag-core">CORE</span></dt>
+  <dd>Starboard 二进制接口规范。JSON 格式文件定义各架构的 API 版本、类型大小、字节序、指针宽度。确保 Evergreen 架构下 `libcobalt.so` 与 `loader_app` 的二进制兼容性。<span class="tag-ref">`starboard/doc/starboard_abi.md`</span></dd>
+
+  <dt>Evergreen <span class="tag tag-core">CORE</span></dt>
+  <dd>Cobalt 的云端可更新架构。将 Cobalt Core (`libcobalt.so`) 与 Starboard 平台实现分离，允许通过 Google 更新服务推送 Cobalt 更新而不需要平台固件 OTA。<span class="tag-ref">`starboard/doc/evergreen/`</span></dd>
+
+  <dt>SB_API_VERSION <span class="tag tag-core">CORE</span></dt>
+  <dd>定义平台实现的 Starboard API 版本的宏。写在平台 `configuration.h` 中。AML 当前主线基于 SB API 23，sb17/sb18 分支在新版本迁移中。</dd>
+</dl>
+
+<h2>Amlogic 平台特定</h2>
+
+<dl>
+  <dt>AML / Amlogic <span class="tag tag-aml">AML</span></dt>
+  <dd>Amlogic（晶晨半导体）—— 领先的 SoC 厂商，专注智能电视、机顶盒、智能家居等嵌入式多媒体设备。</dd>
+
+  <dt>ESSOS <span class="tag tag-aml">AML</span></dt>
+  <dd>Amlogic 的图形和输入系统 (ESS OS)。提供 `EssCtx` 上下文、键盘/指针事件监听、窗口管理。AML Starboard 的 `Application` 类封装了 ESSOS 的事件循环。<span class="tag-ref">`<essos-app.h>`</span></dd>
+
+  <dt>Yocto <span class="tag tag-aml">AML</span></dt>
+  <dd>AML 平台的构建系统基础。AML 使用 Yocto 项目来构建嵌入式 Linux 发行版。绝大多数 AML commit 标题以 "Yocto:" 开头。</dd>
+
+  <dt>RDK <span class="tag tag-aml">AML</span></dt>
+  <dd>Reference Design Kit — 有线电视/IPTV 行业的参考设计套件。AML 支持 RDK 平台，有独立分支 `23.lts.amlogic.rdk`。RDK 版本使用 GStreamer 媒体管线。</dd>
+
+  <dt>Westeros <span class="tag tag-aml">AML</span></dt>
+  <dd>Wayland 协议兼容的显示合成器，RDK 平台使用。AML 在 RDK 启动器中设置 `WESTEROS_GL_USE_AMLOGIC_AVSYNC` 和 `WESTEROS_SINK_AMLOGIC_USE_DMABUF` 环境变量以启用 AML 硬件同步。<span class="tag-ref">`starboard/rdk/launcher.py`</span></dd>
+
+  <dt>amlhalasink <span class="tag tag-aml">AML</span></dt>
+  <dd>Amlogic 硬件视频解码的 GStreamer element。RDK 移植中通过 `wait-video`、`a-wait-timeout`、`disable-xrun` 属性配置解码行为。<span class="tag-ref">`starboard/contrib/rdk/.../player_internal.cc`</span></dd>
+
+  <dt>libamlv4l2 <span class="tag tag-aml">AML</span></dt>
+  <dd>Amlogic 的 V4L2 封装库。用于硬件视频编码器 (`/dev/amvenc_avc`)。通过 `dlopen` 动态加载。<span class="tag-ref">`~/Code/cobalt/media/gpu/v4l2/aml_v4l2_device.cc`</span></dd>
+</dl>
+
+<h2>媒体管线</h2>
+
+<dl>
+  <dt>Player <span class="tag tag-media">MEDIA</span></dt>
+  <dd>Starboard 中控制媒体播放的 API。包括创建、销毁、seek、写入样本、设置音量、播放速率等。AML 实现在 `player/` 目录下有 15 个文件。<span class="tag-ref">`third_party/starboard/aml/shared/player/`</span></dd>
+
+  <dt>Media <span class="tag tag-media">MEDIA</span></dt>
+  <dd>Starboard 中查询媒体能力的 API。包括编解码器支持检测、缓冲区配置、输出保护等。AML 实现在 `media/` 目录下有 19 个文件。<span class="tag-ref">`third_party/starboard/aml/shared/media/`</span></dd>
+
+  <dt>GStreamer <span class="tag tag-media">MEDIA</span></dt>
+  <dd>开源多媒体框架。AML 的 RDK 移植使用 GStreamer 构建媒体管线。`gst_media_utils.cc` 是 AML GStreamer 辅助函数的实现。<span class="tag-ref">`third_party/starboard/aml/shared/media/gst_media_utils.cc`</span></dd>
+
+  <dt>Widevine <span class="tag tag-media">MEDIA</span></dt>
+  <dd>Google 的 DRM 内容保护方案。AML 实现了 Widevine DRM 系统，支持 L1/L3 安全级别、会话管理、密钥存储、许可证解析。<span class="tag-ref">`third_party/starboard/aml/shared/widevine/`</span></dd>
+
+  <dt>PIP (Picture-in-Picture) <span class="tag tag-media">MEDIA</span></dt>
+  <dd>画中画功能，在一个视频窗口之上叠加另一个小窗口。AML 通过 `max_video_capabilities` 参数检测 PIP 需求：当描述为 `"width=432; height=240; framerate=15;"` 时创建 PIP 播放器。PIP 模式下丢弃音频（`audio_codec_ = kSbMediaAudioCodecNone`），sink 名称使用 `-pip` 后缀，设置 `pip=TRUE` 和 `res-usage=0` 降低资源优先级。主+PIP 双路播放由 <code>number_of_players_ &gt;= 2</code> 的限制保证。<span class="tag-ref">`third_party/starboard/aml/shared/player/player_internal.cc:999-1007`</span></dd>
+
+  <dt>Dual Video <span class="tag tag-media">MEDIA</span></dt>
+  <dd>双视频并发解码。用于主视频 + PIP 画中画场景。AML 支持两个 `SbPlayer` 实例同时运行，每个实例有独立的 GStreamer pipeline 和 playback_thread。第二个播放器（PIP）降级为低分辨率（432x240@15）、纯视频模式。</dd>
+
+  <dt>secmem <span class="tag tag-media">MEDIA</span></dt>
+  <dd>安全内存 (Secure Memory)，用于保护 DRM 解密后的视频数据。AML VP9/AV1 解码中使用 secmem 解析器替代插件方案。</dd>
+
+  <dt>Decode-to-Texture <span class="tag tag-media">MEDIA</span></dt>
+  <dd>将解码后的视频帧直接渲染到纹理，用于 360° 球形视频等场景。AML 的 `player_get_current_frame.cc` 实现了 `SbPlayerGetCurrentFrame`。<span class="tag-ref">`starboard/doc/howto_decode_to_texture.md`</span></dd>
+</dl>
+
+<h2>系统与构建</h2>
+
+<dl>
+  <dt>GN <span class="tag tag-system">SYS</span></dt>
+  <dd>Generate Ninja — Cobalt/Satrboard 的构建系统（替代 GYP）。`BUILD.gn` 定义构建目标。AML 也遵循 GN 规范。<span class="tag-ref">`starboard/build/doc/gn_migrate_stub_to_platform.md`</span></dd>
+
+  <dt>platform_configuration <span class="tag tag-system">SYS</span></dt>
+  <dd>GN 构建中描述平台特性的配置。每个二进制变体必须有 `platform_configuration/BUILD.gn` 和 `platform_configuration/configuration.gni`。AML 的 arm/arm64 各有自己的配置。<span class="tag-ref">`third_party/starboard/aml/arm/platform_configuration/`</span></dd>
+
+  <dt>Amlogic::Platform <span class="tag tag-system">SYS</span></dt>
+  <dd>AML 平台服务框架。提供 `PlatformEvent` 事件总线和 `Subscriber` 接口。`DeviceInfoService`、`NetworkService`、`VoiceInputService`、`HDCP`、`CEC` 等都订阅此事件系统。<span class="tag-ref">`aml_platform.h`</span></dd>
+
+  <dt>CEC <span class="tag tag-system">SYS</span></dt>
+  <dd>Consumer Electronics Control — HDMI CEC 协议。允许通过 HDMI 远程控制设备。AML 实现了 `CecEventHandle` 来响应 CEC 事件。<span class="tag-ref">`aml_platform.h`</span></dd>
+
+  <dt>HDCP <span class="tag tag-system">SYS</span></dt>
+  <dd>High-bandwidth Digital Content Protection — HDMI 内容保护。AML 的 `HdcpService` 监控 HDMI 热插拔和 HDCP 状态（非 TV 平台）。<span class="tag-ref">`aml_platform.h`</span></dd>
+
+  <dt>PCM <span class="tag tag-system">SYS</span></dt>
+  <dd>Pulse Code Modulation — 音频数据格式。AML 音频实现涉及 ALSA (Advanced Linux Sound Architecture) 接口。</dd>
+</dl>
+
+<hr>
+
+<p style="text-align:center;color:#999;font-size:0.85rem">AML Starboard Glossary v1 · 随课程更新</p>
+
+</body>
+</html>

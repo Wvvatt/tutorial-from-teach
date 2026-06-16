@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0010: 一次性播放请求的完整链路</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.3rem; font-weight: 600; margin-top: 2.8rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.05rem; font-weight: 600; margin-top: 1.4rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.6rem; }
+  ul, ol { margin: 0.3rem 0 0.6rem 1.4rem; }
+  li { margin-bottom: 0.2rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 0.8rem 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    margin: 0.6rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    margin: 0.8rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .phase {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    margin: 1.2rem 0;
+  }
+  .phase .label { display: inline-block; font-size: 0.8rem; padding: 0.15rem 0.6rem; border-radius: 10px; font-weight: 600; margin-bottom: 0.6rem; }
+  .phase .label.sel { background: #dbeafe; color: #1e40af; }
+  .phase .label.create { background: #dcfce7; color: #166534; }
+  .phase .label.data { background: #fef3c7; color: #92400e; }
+  .phase .label.decrypt { background: #fce7f3; color: #9d174d; }
+  .phase .label.render { background: #f3e8ff; color: #6b21a8; }
+  .map { color: #888; font-size: 0.75rem; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.8rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0010: 一次性播放请求的完整链路</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第十课 (综合)</p>
+
+<p>从用户点击 YouTube 视频到画面出现在电视上，Cobalt 走了哪些路径？这一课以一次 <strong>H264 + AAC + Widevine DRM</strong> 的加密视频为例，完整追踪。</p>
+
+<hr>
+
+<h2>阶段一: 流选择</h2>
+
+<div class="diagram">
+YouTube CDN
+  │  Cobalt EME 解析 manifest, 选择视频流
+  ▼
+(1) SbMediaIsSupported()
+  → media_is_supported.cc:92 → DrmSystemWidevine::IsKeySystemSupported()
+  → 确认 key_system 支持 codec 对应的 MIME type
+
+(2) SbMediaIsVideoSupported()
+  → media_is_video_supported.cc:42
+  → 检查: decode_to_texture? 分辨率? HDR? codec∈{H264,VP9,AV1}?
+  → Application::GetDisplayResolution() → DeviceInfoService (L1)
+
+(3) SbMediaIsAudioSupported()
+  → media_is_audio_supported.cc:59
+  → 检查: Dolby 支持? bitrate? GstRegistryHasElementForMediaType
+</div>
+
+<span class="map">📚 Lesson 4: Media 模块</span>
+
+<h2>阶段二: DRM License 获取</h2>
+
+<div class="diagram">
+(4) SbDrmCreateSystem("com.widevine.alpha", ...)
+  → drm_create_system.cc:31
+  → new DrmSystemWidevine(...)
+    → EnsureWidevineCdmIsInitialized()
+      → wv3cdm::initialize(..., clientInfo, _storage, &clock, &timer)
+      → 一次性 CDM 初始化 (全局单例)
+
+(5) GenerateSessionUpdateRequest(ticket, "cenc", init_data)
+  → cdm_->createSession()       → wvcdm_session_id
+  → cdm_->generateRequest()     → CDM 生成 license request
+
+(6) CDM → onMessage(kLicenseRequest) → 回调:
+  → SendSessionUpdateRequest()  → session_update_request_callback_
+  → Cobalt EME → HTTP POST → 远程 license 服务器
+  → 返回 license response
+
+(7) UpdateSession(ticket, license_response)
+  → cdm_->update(wvcdm_session_id, response)
+  → CDM 解析 license, 提取 key
+
+(8) CDM → onKeyStatusesChange(wvcdm_session_id, has_new_usable_key)
+  → OnAllKeysUpdated()
+    → SbEventSchedule(AnnounceKeys, this, 0)    ← 下一 tick 延迟通知
+      → 遍历 observers_ → observer->OnKeyReady(key, key_len)
+        → PlayerImpl 收到通知 → post "key-status-change" GstMessage
+</div>
+
+<span class="map">📚 Lesson 3: Widevine DRM</span>
+
+<h2>阶段三: Player 创建</h2>
+
+<div class="diagram">
+(9) SbPlayerCreate(window, creation_param, ...)
+  → player_create.cc:31
+  → 校验: callbacks, codecs, only PunchOut output
+  → GstRegistryHasElementForMediaType(codec)  ← 最终确认 decoder 存在
+
+  → SbPlayerPrivate::CreateInstance(...)
+    → player_internal.cc:2696
+    → number_of_players_ < 2 ? (限制最多 2 路)
+    → new PlayerImpl(this, window, video_codec, audio_codec, drm_system, ...)
+
+(10) PlayerImpl 构造函数 (player_internal.cc:903-1220)
+  → 检测 DRM → gst_secmem_allocator_new() (格式: VP9/AV1/H264)
+  → 检测 PIP → max_video_capabilities == "432x240@15"
+  → 构建 pipeline 字符串:
+    ⎧ appsrc my_vsrc ! h264secparse !
+    ⎨ amlvideosink|westerossink my_vsink-mp
+    ⎩ appsrc my_asrc ! aacparse ! avdec_aac ! audioconvert ! audioresample ! amlhalasink my_asink-mp
+
+  → gst_parse_launch()           → GStreamer pipeline 创建
+  → appsrc 配置: caps, callbacks (AppSrcNeedData/EnoughData/SeekData), max-bytes
+  → video_sink_: low-memory, PIP 属性
+  → audio_sink_: wait-video=T, a-wait-timeout=4000ms, disable-xrun=F
+  → installUnderflowCallbackFromPlatform()  ← 注册 underflow 回调
+  → gst_bus_add_watch(bus, BusMessageCallback)
+  → ChangePipelineState(GST_STATE_READY)
+  → SbThreadCreate(playback_thread, ThreadEntryPoint)
+    → state_ = kInitial
+    → Dispatch: PlayerStatusTask(kSbPlayerStateInitialized)
+    → g_main_loop_run(main_loop_)
+</div>
+
+<span class="map">📚 Lesson 2: Player 模块</span>
+
+<h2>阶段四: 数据推送与解密</h2>
+
+<div class="diagram">
+(11) Cobalt 发送第一个 Seek(0) → Pipeline 进入 PAUSED 状态
+  → state_ = kInitialPreroll
+  → ChangePipelineState(GST_STATE_PAUSED)   ← 开始 buffering
+  → 通知 Cobalt: kSbPlayerStatePrerolling
+  → Pipeline ASYNC_DONE → state_ = kPresenting
+
+(12) GStreamer appsrc need-data 回调触发:
+  → AppSrcNeedData() → DecoderNeedsData(MediaType::kVideo|kAudio)
+  → Cobalt 收到 kSbPlayerDecoderStateNeedsData → 开始推送样本
+
+(13) SbPlayerWriteSample2(player, kSbMediaTypeVideo, sample_infos, 1)
+  → player_write_sample.cc:30
+  → player_->WriteSample(sample_type, sample_infos, count)
+
+(14) PlayerImpl::WriteSample(SbPlayerSampleInfo*) (player_internal.cc:1847)
+  → 分配 GstBuffer, 拷贝 Cobalt 数据
+  → 解析 drm_info: identifier(key_id), iv, subsamples
+  → SessionIdByKeyId(key_id) → session_id
+  → DRM key 未就绪? → PendingSample 挂起
+     DRM key 就绪? → 继续 ↓
+
+(15) PlayerImpl::WriteSample(GstBuffer*) (player_internal.cc:1609)
+  → [secure = true] DRM + video:
+    ├─ gst_buffer_new_allocate(allocator_, size) → buffer2 (secmem)
+    ├─ gst_secmem_memory_get_handle(mem) → handle
+    └─ gst_buffer_add_protection_meta(buffer, drm_info) ← handle 挂原始 buffer
+
+(16) DrmSystemWidevine::Decrypt(GstBuffer*) (drm_system_widevine.cc:956)
+  → DecryptImpl(...) → DecryViaWv(id, mediaType, subsamples, iv, data, keyId, ..., sec_handle)
+    → 构造 wv3cdm::DecryptionBatch
+    → [video]: is_secure=true, output.data = sec_handle  ← 硬件解密写入 secmem
+    → [audio]: is_secure=false, 分配临时缓冲区
+    → cdm_->decrypt(decryptionBatch)  ← Widevine CDM → TrustZone 硬件解密
+
+(17) 解密后处理:
+  → [VP9/AV1]: gst_secmem_parse_vp9/av1(mem)
+  → gst_app_src_push_buffer(GST_APP_SRC(src), buffer2)
+    ↑ 此时 buffer2 中的数据在 secmem 中, CPU 不可读, 只有硬件解码器可访问
+
+(18) 缓冲水位管理:
+  → 每 80ms: CheckVideoBufferHealth() 巡检
+  → video_queued < 250ms? → internal pause (pipeline_is_paused_internal_)
+  → video_queued > 2000ms && audio > 900ms? → resume PLAYING
+</div>
+
+<span class="map">📚 Lesson 2: Player · Lesson 3: DRM · Lesson 8: Input (seek)</span>
+
+<h2>阶段五: GStreamer 管线处理</h2>
+
+<div class="diagram">
+(19) GStreamer pipeline 处理加密样本:
+
+[视频路径]
+    appsrc my_vsrc
+      → h264secparse (安全解析器, 提取 NAL units)
+        → [硬件视频解码器] (从 secmem 读取, 解码 H264 → YUV)
+          → westerossink / amlvideosink
+            → Westeros Wayland compositor → DMA-BUF 传输
+              → DRM/KMS → GPU overlay → HDMI 输出
+
+[音频路径]
+    appsrc my_asrc
+      → aacparse (解析 AAC frames)
+        → avdec_aac (软件解码 AAC → PCM)
+          → audioconvert + audioresample (格式转换)
+            → amlhalasink (Amlogic 硬件音频 sink)
+              → ALSA → I2S/TDM → HDMI 音频输出
+
+(20) 音视频同步:
+  WESTEROS_GL_USE_AMLOGIC_AVSYNC=1
+  → Westeros 将视频 PTS 传给 Amlogic 硬件 AV 同步引擎
+  → 硬件控制 vsync 时机, 实现音频跟随视频
+</div>
+
+<span class="map">📚 Lesson 9: ESSOS + Westeros</span>
+
+<h2>阶段六: HDCP 内容保护</h2>
+
+<div class="diagram">
+(21) HDMI 正常 → HDCP 验证通过 → 正常播放
+
+(22) HDMI 拔出或 HDCP 失败:
+    udev event → HdcpService::onEvent()
+      → hdcpStatus = false
+      → SetFreeze(true)
+        → Application::SendBlurEvent()
+        → Application::SendConcealEvent()
+        → Application::SendFreezeEvent()
+          → Application::Inject(Freeze event)
+            → player::ForceStop()                   ← Lesson 2
+              → PlayerRegistry::ForceStop()
+                → 每个 pipeline 发送 "force-stop" 消息
+                → ChangePipelineState(GST_STATE_READY)
+
+(23) HDMI 恢复:
+    udev event → HdcpService::onEvent()
+      → SetFreeze(false)
+        → SendUnfreezeEvent() + SendRevealEvent() + SendFocusEvent()
+</div>
+
+<span class="map">📚 Lesson 1: aml_platform · Lesson 5: RDK · Lesson 7: libcobalt</span>
+
+<h2>阶段七: 播放控制</h2>
+
+<div class="diagram">
+(24) Seek: SbPlayerSeek(player, seek_time, ticket)
+    → player_seek.cc → player_->Seek()
+    → gst_element_seek(pipeline, rate, GST_SEEK_FLAG_FLUSH | ACCURATE, seek_time)
+    → 清除 decoder_state, eos_data, 重置 timestamps
+    → state_ = kPrerollAfterSeek → ASYNC_DONE → kPresenting
+
+(25) 倍速: SbPlayerSetPlaybackRate(player, rate)
+    → player_set_playback_rate.cc → SetRate(rate)
+    → rate==0: ChangePipelineState(PAUSED)
+    → rate==1: ChangePipelineState(PLAYING)
+    → rate!=1: SetRateImpl(rate) → gst_pad_send_event(audio_sink, segment event)
+
+(26) 音量: SbPlayerSetVolume(player, vol)
+    → player_set_volume.cc → g_object_set(audio_sink, "volume", vol)
+</div>
+
+<span class="map">📚 Lesson 2: Player 模块</span>
+
+<h2>阶段八: 播放结束与清理</h2>
+
+<div class="diagram">
+(27) EOS 到达:
+    → SbPlayerWriteEndOfStream(type)
+    → gst_app_src_end_of_stream(src)
+    → 所有 stream EOS → pipeline 发送 GST_MESSAGE_EOS
+    → BusMessageCallback → Dispatch: kSbPlayerStateEndOfStream
+    → Cobalt 停止写入, UI 显示播放完成
+
+(28) Player 销毁:
+    → SbPlayerDestroy(player) → PlayerImpl::~PlayerImpl()
+    → GetPlayerRegistry()->Remove(this)
+    → 清理 GStreamer 资源 (source destroy, bus unwatch)
+    → ChangePipelineState(GST_STATE_NULL)
+    → 发送 PlayerDestroyedTask → g_main_loop_quit()
+    → SbThreadJoin(playback_thread)
+    → 释放 secmem allocator, DRM observer 注销
+</div>
+
+<h2>完整时间线总览</h2>
+
+<div class="diagram">
+用户点击播放
+ │
+ ├─[1-3]   流选择        Media 模块        ~10ms
+ ├─[4-8]   DRM License   Widevine CDM      ~200-500ms (网络)
+ ├─[9-10]  Player 创建   Player 模块       ~50ms
+ ├─[11]    Preroll       Player 状态机     ~100ms
+ ├─[12-18] 数据推送+解密  WriteSample+DRM  持续 (随帧)
+ ├─[19-20] GStreamer 处理 解码+渲染        实时
+ ├─[21-23] HDCP 保护     HdcpService      实时监控
+ ├─[24-26] 播放控制      Seek/Rate/Volume  按需
+ └─[27-28] 结束清理      Destroy           ~50ms
+
+涉及模块: Media, DRM, Player, aml_platform, RDK, libcobalt,
+           ESSOS, Westeros, GStreamer, secmem, Widevine CDM
+</div>
+
+<hr>
+
+<p>这就是从用户点击到屏幕显示的完整之旅。没有新代码——全部是前十课的知识串联起来的结果。</p>
+
+<div class="footer">
+Lesson 0010 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

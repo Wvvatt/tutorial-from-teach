@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0009: ESSOS + Westeros — 显示与图形架构</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0009: ESSOS + Westeros — 显示与图形架构</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第九课</p>
+
+<p>前面八课我们一直在看 Cobalt <strong>内部</strong>怎么跑。这一课往前走一层，看看 Cobalt <strong>下面</strong>是什么——Amlogic 的显示和输入栈是怎么和 Cobalt 交互的。</p>
+
+<h2>PART A: ESSOS — Amlogic 显示/输入抽象层</h2>
+
+<h3>1. 什么是 ESSOS</h3>
+
+<p>ESSOS (ESS OS) 是 Amlogic 专有的<strong>图形和输入抽象库</strong> (<code>libessos</code>)。它为应用提供统一的接口，屏蔽底层是直接操作 DRM/KMS、还是经过 Wayland 合成器、还是其他显示系统。</p>
+
+<pre><code>--- 不同平台下的 ESSOS 底层适配 ---
+
+TV 平台:    Cobalt → libessos → DRM/KMS (直接控制显卡)
+RDK 平台:    Cobalt → libessos → Westeros Wayland → DRM/KMS
+纯 Linux:   Cobalt → libessos → X11</code></pre>
+
+<p>ESSOS 的设计理念类似于 Starboard 的设计理念——<strong>"对上层提供统一 API，对下层适配不同实现"</strong>。</p>
+
+<h3>2. ESSOS 核心 API</h3>
+
+<p>从代码中提取的 ESSOS 公共 API：</p>
+
+<pre><code>--- 关系: &lt;essos-app.h&gt; (Amlogic SDK 头文件) ---
+
+生命周期:
+  EssCtx*      EssContextCreate()
+  bool         EssContextInit(EssCtx*)
+  void         EssContextDestroy(EssCtx*)
+
+事件循环:
+  void         EssContextRunEventLoopOnce(EssCtx*)   ← 核心: 每次 poll 驱动一次
+
+窗口:
+  bool         EssContextCreateNativeWindow(ctx, w, h, &native)  ← 创建原生窗口
+  bool         EssContextDestroyNativeWindow(ctx, native)         ← 销毁
+
+  bool         EssContextStart(EssCtx*)              ← 开始渲染
+  bool         EssContextStop(EssCtx*)               ← 停止渲染
+  void         EssContextResizeWindow(ctx, w, h)     ← 窗口大小调整
+
+显示:
+  bool         EssContextGetDisplaySize(ctx, &w, &h) ← 查询显示尺寸
+
+输入 (回调注册):
+  bool         EssContextSetTerminateListener(ctx, listener)
+  bool         EssContextSetKeyListener(ctx, listener)
+  bool         EssContextSetPointerListener(ctx, listener)
+  bool         EssContextSetSettingsListener(ctx, listener)
+
+EGL/OpenGL:
+  bool         EssContextGetEGLDisplayType(ctx, &type)</code></pre>
+
+<h3>3. ESSOS 在 AML 代码中的使用</h3>
+
+<p>回顾第一课的 <code>Application</code> 构造函数：</p>
+
+<pre><code>--- application_aml.cc:101-140 ---
+
+Application::Application() {
+  ctx_ = EssContextCreate();               ← 创建 ESSOS 上下文
+  EssContextInit(ctx_);                     ← 初始化
+
+  // 注册 4 个回调监听器
+  EssContextSetTerminateListener(ctx_, this, &terminateListener);
+  EssContextSetKeyListener(ctx_, this, &keyListener);
+  EssContextSetPointerListener(ctx_, this, &pointerListener);
+  EssContextSetSettingsListener(ctx_, this, &settingsListener);
+}</code></pre>
+
+<p>事件循环中 ESSOS 的驱动（<code>application_aml.cc:196</code>）：</p>
+
+<pre><code>--- application_aml.cc:192-196 ---
+
+Application::PollNextSystemEvent():
+  if ((now - ess_loop_last_ts_) > 16ms):     ← 每 16ms 一次 (60fps)
+    ess_loop_last_ts_ = now;
+    EssContextRunEventLoopOnce(ctx_);          ← 驱动 ESSOS 一次, 触发键盘/指针回调
+</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 16ms 的来历</div>
+<code>kEssRunLoopPeriod = 16666 microseconds ≈ 16.7ms ≈ 60fps</code>。这个值定义了 Cobalt 的渲染帧率。
+</div>
+
+<h3>4. ESSOS 的 EGL 集成</h3>
+
+<p>ESSOS 还提供了 OpenGL 集成：</p>
+
+<pre><code>--- system_egl.cc (RDK contrib):142-166 ---
+
+SbEglGetDisplay():
+  EssCtx *ctx = Application::Get()-&gt;GetEssCtx();
+
+  // 查询 ESSOS 的 EGL 显示类型
+  EssContextGetEGLDisplayType(ctx, &display_type);
+
+  // 如果 ESSOS 报告平台类型是 Wayland 扩展:
+  if (EssContextGetAppPlatformDisplayType(ctx) ==
+      EssAppPlatformDisplayType_waylandExtension)
+    → 使用 eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT, ...)
+    → 否则回退到标准 eglGetDisplay(display_id)</code></pre>
+
+<p>ESSOS 知道底层是 Wayland 还是 DRM，然后帮 Cobalt 选择正确的 EGL 初始化路径。</p>
+
+<hr>
+
+<h2>PART B: Westeros — RDK 的 Wayland 合成器</h2>
+
+<h3>5. 什么是 Westeros</h3>
+
+<p>Westeros 是 RDK 的<strong>轻量 Wayland 合成器</strong>。从它的 <a href="https://github.com/rdkcentral/westeros">GitHub README</a>：</p>
+
+<blockquote>
+Westeros is a light-weight Wayland compositor library. It supports normal, nested, and embedded compositors.
+</blockquote>
+
+<p>三种运行模式（由启动参数决定）：</p>
+
+<pre><code>Normal   模式: Cobalt → Westeros → 屏幕           (直接显示到硬件)
+Nested   模式: Cobalt → Westeros → 另一个合成器     (作为 Wayland 客户端)
+Embedded 模式: 外部应用 → Westeros → 嵌入到自己的 UI (嵌入集成)</code></pre>
+
+<p>在 RDK 机顶盒/TV 场景中，Westeros 运行在 <strong>Normal</strong> 模式，全屏控制显示器。</p>
+
+<h3>6. Westeros 在 Cobalt 中的位置</h3>
+
+<p>Westeros 在 Cobalt 架构中有两个切入点：</p>
+
+<pre><code>--- 两条通往 Westeros 的路径 ---
+
+路径 A: Cobalt 渲染 (ESSOS)
+  Cobalt Application
+    → EssContextCreateNativeWindow() → libessos
+      → Westeros Wayland protocol → westeros compositor
+        → DRM/KMS → GPU
+
+路径 B: 视频渲染 (GStreamer)
+  Player::WriteSample → gst_app_src_push_buffer
+    → GStreamer pipeline → westerossink (GStreamer element)
+      → Westeros Wayland buffer → westeros compositor
+        → DRM/KMS → GPU (硬件 overlay)</code></pre>
+
+<p>视频走 <code>westerossink</code>，UI 走 ESSOS → Wayland。两条路径在 Westeros 合成器汇合，由硬件合成到同一帧。</p>
+
+<p>但二者的 <strong>buffer 类型完全不同</strong>：</p>
+
+<table>
+<tr><th></th><th>UI (ESSOS → Wayland)</th><th>视频 (westerossink)</th></tr>
+<tr><td>内存类型</td><td><strong>REE (普通内存)</strong></td><td><strong>Secure DMA-BUF (安全内存)</strong></td></tr>
+<tr><td>分配器</td><td>libessos 内部 shm/dma 分配</td><td>gst_secmem_allocator (secmem)</td></tr>
+<tr><td>CPU 可读?</td><td>是</td><td>否 (只有硬件解码器可访问)</td></tr>
+<tr><td>传输方式</td><td>Wayland shm buffer / dma-buf</td><td>DMA-BUF (WESTEROS_SINK_AMLOGIC_USE_DMABUF=1)</td></tr>
+<tr><td>受 HDCP 保护?</td><td>否</td><td>是 (通过 TrustZone)</td></tr>
+</table>
+
+<p>这和第三课的 secmem 架构一致——视频解密后的数据在安全内存中，通过 DMA-BUF 直接传递到 Westeros 合成器，全程不经过 CPU 可读的 REE 内存。<code>WESTEROS_SINK_AMLOGIC_USE_DMABUF=1</code> 就是这个零拷贝安全路径的开关。</p>
+
+<h3>7. Westeros 环境变量</h3>
+
+<p>从 <code>starboard/rdk/launcher.py:195-209</code> 中提取的 Westeros 启动配置：</p>
+
+<pre><code>--- launcher.py:195-209 ---
+
+WESTEROS_GL_USE_BEST_MODE=1           ← 使用显示器最佳模式
+WESTEROS_GL_MAX_MODE=3840x2160        ← 最大分辨率 4K
+WESTEROS_GL_GRAPHICS_MAX_SIZE=1920x1080 ← UI 图形分辨率限制
+WESTEROS_GL_USE_AMLOGIC_AVSYNC=1      ← Amlogic 硬件音视频同步
+WESTEROS_SINK_AMLOGIC_USE_DMABUF=1    ← DMA-BUF 零拷贝视频帧
+WESTEROS_SINK_USE_FREERUN=1           ← 自由运行模式 (不同步)
+WESTEROS_SINK_USE_ESSRMGR=1           ← 使用 ESS 资源管理器
+WESTEROS_GL_USE_REFRESH_LOCK=1        ← 刷新锁定
+WESTEROS_GL_USE_UEVENT_HOTPLUG=1      ← HDMI 热插拔支持
+ESSOS_NO_EVENT_LOOP_THROTTLE=1        ← 禁用 ESSOS 事件循环节流
+LD_PRELOAD=/usr/lib/libwesteros_gl.so  ← OpenGL 拦截器</code></pre>
+
+<table>
+<tr><th>变量</th><th>作用</th></tr>
+<tr><td><code>WESTEROS_GL_USE_AMLOGIC_AVSYNC=1</code></td><td>启用 Amlogic 硬件 AV 同步——Westeros 将视频帧的 PTS 传给硬件，由硬件控制 vsync 时机</td></tr>
+<tr><td><code>WESTEROS_SINK_AMLOGIC_USE_DMABUF=1</code></td><td>视频帧通过 DMA-BUF 传递——零拷贝，解码器输出直接映射到 Westeros 的 compositor buffer</td></tr>
+<tr><td><code>WESTEROS_GL_GRAPHICS_MAX_SIZE=1920x1080</code></td><td>UI 渲染上限——4K 显示器上 UI 只渲染 1080p 然后硬件放大，节省 GPU</td></tr>
+<tr><td><code>LD_PRELOAD=libwesteros_gl.so</code></td><td>OpenGL 拦截器——接管所有 EGL/OpenGL 调用，routing 到 Westeros 的 Wayland EGL</td></tr>
+</table>
+
+<div class="callout">
+<div class="callout-title">🔑 关键设计：UI 和视频的不同分辨率路径</div>
+Westeros 将 UI (Cobalt 渲染) 和视频 (GStreamer 解码) 分开处理：
+<ul>
+  <li><strong>UI</strong>: 渲染到 1920x1080 → 硬件放大到 3840x2160（节省 GPU）</li>
+  <li><strong>视频</strong>: 解码器直接输出 4K → DMA-BUF 零拷贝到合成器 → 硬件 overlay</li>
+</ul>
+这是嵌入式设备的标准做法——UI 不需要 4K 精度，但视频必须原生 4K 以保持画质。
+</div>
+
+<hr>
+
+<h2>PART C: 完整图形栈</h2>
+
+<pre><code>┌────────────────────────────────────────────────────────┐
+│                    Cobalt / YouTube                     │
+├─────────────────────┬──────────────────────────────────┤
+│    SbWindow (UI)    │    SbPlayer (Video)              │
+│    ↓                │    ↓                             │
+│  Application        │  PlayerImpl                      │
+│    ↓                │    ↓                             │
+│  libessos           │  GStreamer pipeline              │
+│    ↓                │    ↓                             │
+│ ESSOS Wayland client│  westerossink (GStreamer)        │
+├─────────────────────┴──────────────────────────────────┤
+│            Westeros Wayland Compositor                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │ UI Surface   │  │ Video Overlay│  │ HW AV Sync   │ │
+│  │ (REE 内存)   │  │ (Secure DMA) │  │ (vsync控制)  │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+├────────────────────────────────────────────────────────┤
+│              Amlogic DRM/KMS + GPU 硬件                │
+│  ┌────────┐  ┌──────────┐  ┌───────────┐             │
+│  │ 显示   │  │ 视频解码  │  │ HDMI 输出 │             │
+│  │ 控制器 │  │ 器 (V4L2) │  │ (HDCP)    │             │
+│  └────────┘  └──────────┘  └───────────┘             │
+└────────────────────────────────────────────────────────┘</code></pre>
+
+<h2>9. 动手练习</h2>
+<ol>
+  <li>在 <code>launcher.py:195-209</code> 中逐行理解每个环境变量的用途</li>
+  <li>追踪 <code>EssContextRunEventLoopOnce</code> 的调用路径：从 Application::PollNextSystemEvent 到 ESSOS 回调</li>
+  <li>在 <code>application_aml.cc:116-129</code> 中数一数 ESSOS 注册了几个监听器</li>
+  <li>理解 <code>westerossink</code> 和 <code>amlvideosink</code> 的选择逻辑（<code>player_internal.cc:1064-1068</code>）</li>
+</ol>
+
+<h2>10. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (ESSOS 在 Application 中的使用)</li>
+  <li><a href="https://github.com/rdkcentral/westeros">Westeros GitHub</a> — 源码和文档</li>
+  <li>Wayland 协议: <a href="https://wayland.freedesktop.org/">wayland.freedesktop.org</a></li>
+</ul>
+
+<div class="footer">
+Lesson 0009 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

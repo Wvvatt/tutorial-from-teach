@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0007: Hang Detector + libcobalt — 系统守护与平台控制</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+  .green { color: #16a34a; font-weight: 600; }
+  .red { color: #dc2626; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0007: Hang Detector + libcobalt — 系统守护与平台控制</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第七课</p>
+
+<p>这一课介绍两个系统级组件：<strong>Hang Detector</strong>——嵌入式必备的看门狗机制，防止线程死锁/卡死；<strong>libcobalt</strong>——RDK/WPEFramework 控制 Cobalt 生命周期的外部 C API。</p>
+
+<h2>PART A: Hang Detector — 看门狗</h2>
+
+<h3>1. 概念</h3>
+
+<p>嵌入式设备上，线程卡死（因死锁、死循环、GStreamer 挂起等）不能导致设备无响应。<code>HangMonitor</code> 是每个线程的健康标记，<code>HangDetector</code> 线程定期巡检。</p>
+
+<pre><code>--- hang_detector.cc:80-178, 184-215 ---
+
+                     ┌─────────────────────┐
+                     │  hangdetector_thread │  定时巡检 (默认每30s)
+                     └──────────┬──────────┘
+                                │
+              ┌─────────────────┼──────────────────┐
+              ▼                 ▼                    ▼
+      ┌─────────────┐  ┌─────────────┐   ┌─────────────┐
+      │ HangMonitor  │  │ HangMonitor  │   │ HangMonitor  │
+      │ "Application"│  │   "Player"   │   │   (others)   │
+      │  (在 app中)  │  │ (在player中) │   │              │
+      └─────────────┘  └─────────────┘   └─────────────┘
+         ↑                ↑
+    Reset() 每16ms       Reset() 在 hang_monitor_source_id_ 中
+    (ess_timer_fd)       (g_timeout_source_new 回调)</pre>
+
+<h3>2. 注册与心跳</h3>
+
+<pre><code>--- hang_detector.cc:184-215 ---
+
+HangMonitor::HangMonitor("Application"):
+  expiration_time_ = now + check_interval   ← 初始过期时间
+  GetHangDetector()->AddMonitor(this)       ← 注册到巡检列表
+
+void HangMonitor::Reset():
+  expiration_time_ = now + check_interval   ← 重置过期时间 (心跳)
+  expiration_count_ = 0                     ← 清零连续过期计数
+
+// 复位间隔 = check_interval / 2
+// 每隔这个时间点主线程必须调用 Reset()
+// 这是"两倍冗余"——连续两次漏掉才判定为过期</pre></code>
+
+<p>在代码中的具体使用：</p>
+<table>
+<tr><th>对象</th><th>负责的线程</th><th>Reset 频率</th></tr>
+<tr><td><code>Application::hang_monitor_</code></td><td>Cobalt 主线程 (ess_timer_fd poll)</td><td>每 16ms</td></tr>
+<tr><td><code>PlayerImpl::hang_monitor_</code></td><td>playback_thread (GLib timer source)</td><td>同 get_interval/2</td></tr>
+</table>
+
+<h3>3. 巡检与杀进程</h3>
+
+<pre><code>--- hang_detector.cc:109-148 ---
+
+HangDetector::DoWork() 的循环:
+
+  for (;;) {
+    WaitTimed(check_interval)  ← 等待巡检间隔 (默认 30s)
+
+    for (每个 monitor):
+      if (expiration_time > now): continue  ← 还活着, 跳过
+
+      if (++expiration_count < 6):
+        print_action()          ← 打印警告, 继续等
+      else:
+        kill_action():          ← 连续 6 次过期 → 杀进程
+          kill(pid, SIGFPE)     ← 先发浮点异常信号
+          sleep(1 min)          ← 等 1 分钟
+          kill(pid, SIGKILL)    ← 还没结束 → 强制杀
+          sleep(1 min)
+          give up               ← 彻底放弃
+  }</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 分阶段杀进程的策略</div>
+连续 6 次过期 = 默认 30s × 6 = <strong>3 分钟</strong> 后认定卡死。先用 <code>SIGFPE</code>（可被捕获，触发 crash dump），再等 1 分钟给 crash handler 时间保存诊断信息，最后用 <code>SIGKILL</code> 强制结束。这是嵌入式系统常见的优雅崩溃策略。
+</div>
+
+<h3>4. 配置</h3>
+
+<pre><code>--- hang_detector.cc:68-78 ---
+
+COBALT_HANG_DETECTOR_INTERVAL_IN_SECONDS   (默认: 30)
+  设为 0 → 禁用检测 (return kSbTimeMax)</code></pre>
+
+<h2>PART B: libcobalt — 外部控制 API</h2>
+
+<h3>5. RDK 如何控制 Cobalt</h3>
+
+<p><code>libcobalt.cc</code> 定义了一组 <code>extern "C"</code> 函数，是 RDK/WPEFramework 调用 Cobalt 的唯一入口。它们通过 <code>APIContext</code> 单例等待 Application 就绪后执行：</p>
+
+<pre><code>--- libcobalt.cc:40-132 ---
+
+struct APIContext:
+  condition_ + mutex_ + running_ 标志
+
+  WaitForApp(lock):
+    while (running_ == false)
+      condition_.Wait()        ← 阻塞直到 Application 就绪
+
+  OnInitialize():
+    running_ = (Application::Get() != nullptr)
+    condition_.Broadcast()     ← 唤醒所有等待的调用</code></pre>
+
+<h3>6. API 一览</h3>
+
+<pre><code>--- libcobalt.cc:160-211 ---
+
+extern "C":
+
+  SbRdkSuspend():
+    → SendBlurEvent → SendConcealEvent → SendFreezeEvent
+    ← 硬暂停: 隐藏 UI, 停止播放
+
+  SbRdkResume():
+    → SendUnfreezeEvent → SendRevealEvent → SendFocusEvent
+    ← 恢复
+
+  SbRdkPause():
+    → Application::Blur(semaphore) → Wait
+    ← 软暂停: 只是去焦点, 不停止播放
+
+  SbRdkUnpause():
+    → Application::Focus(semaphore) → Wait
+    ← 恢复焦点
+
+  SbRdkQuit():      → Application::Stop(0)
+  SbRdkIsResumed(): → IsResumed()
+  SbRdkSendLink():  → SendLink(deepLink)
+
+  SbRdkRegisterNotify(callback):
+    → 注册 notify callback (用于 RDK 回调通知 suspend 等)
+
+  cobalt_oem_notify_suspend(reason, param):
+    → 调用注册的 callback</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 Suspend vs Pause 的区别</div>
+<ul>
+  <li class="red">Suspend: Blur + Conceal + Freeze → 完全隐藏 + 停止 Player (ForceStop)</li>
+  <li class="green">Pause: Blur → 仅失去焦点, 播放继续</li>
+</ul>
+这是 TV 场景中"换台" vs"按 Home"的区别——换台应该暂停, 按 Home 应该冻结。
+</div>
+
+<h3>7. 回调注册</h3>
+
+<pre><code>--- libcobalt.cc:197-208 ---
+
+static libCobaltCallback cobalt_plugin_callback = nullptr;
+
+SbRdkRegisterNotify(callback):    ← RDK 注册回调
+  cobalt_plugin_callback = callback
+
+cobalt_oem_notify_suspend(reason, param):  ← 系统通知 Cobalt
+  cobalt_plugin_callback(reason, param)    ← 转发到 RDK</code></pre>
+
+<p>这是一个<strong>回调反转</strong>模式——RDK 控制 Cobalt（Suspend/Pause/Resume），但 Cobalt 也需要通知 RDK 某些事件（如 OEM suspend），双方通过这个回调通信。</p>
+
+<h3>8. 初期化时序</h3>
+
+<pre><code>--- application_aml.cc:173 ---
+
+Application::Initialize() 被调用时:
+  libcobalt_api::Initialize()         ← APIContext::OnInitialize()
+    running_ = true                   ← 解锁 WaitForApp()
+    condition_.Broadcast()            ← 唤醒所有在 WaitForApp 中阻塞的调用
+
+这意味着: 在 Application::Initialize() 完成之前,
+所有 SbRdkSuspend/Pause/Quit 调用都会阻塞。
+不会出现 Application 尚未初始化就被外部控制的竞态。</pre></code>
+
+<h2>9. 动手练习</h2>
+<ol>
+  <li>在 <code>hang_detector.cc</code> 中找到 Application 和 Player 的 HangMonitor Reset 调用点</li>
+  <li>追踪 <code>cobalt_oem_notify_suspend</code> 到 RDK plugin 的路径</li>
+  <li>对比 <code>SbRdkSuspend</code> 的 Freeze 路径与 HdcpService 的 SetFreeze 路径——两者殊途同归</li>
+</ol>
+
+<h2>10. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (HdcpService Freeze 路径)</li>
+  <li><a href="0005-rdk-integration.html">第五课: RDK 集成</a> (WPEFramework 通信)</li>
+</ul>
+
+<div class="footer">
+Lesson 0007 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

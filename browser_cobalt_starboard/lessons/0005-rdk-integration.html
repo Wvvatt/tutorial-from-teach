@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0005: RDK Integration — 平台服务与焦点管理</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0005: RDK Integration — 平台服务与焦点管理</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第五课</p>
+
+<p>之前的课程聚焦在内部实现。这一课看向<strong>外部</strong>：AML Cobalt 如何与 RDK 平台（WPEFramework/Thunder）通信。这是让 Cobalt 融入更大系统的关键——焦点管理、TTS、设备信息都来自这里。</p>
+
+<h2>1. RDK 与 WPEFramework</h2>
+
+<p>RDK (Reference Design Kit) 是有线电视/IPTV 行业的参考平台。它的核心通信框架是 <strong>WPEFramework (Thunder)</strong>，提供基于 JSON-RPC 的进程间通信。每个功能是一个 <strong>plugin</strong>，通过 callsign 标识。</p>
+
+<pre><code>--- 关键 callsign ---
+
+org.rdk.RDKShell.1       ← 窗口/焦点管理
+org.rdk.TextToSpeech.1   ← 语音合成</code></pre>
+
+<p>ServiceLink 类封装了与 Thunder 的 JSON-RPC 通信：</p>
+
+<pre><code>--- rdkservices.cc:62-138 ---
+
+class ServiceLink {
+  JSONRPC::LinkType&lt;...&gt; link_;
+
+  // Thunder → Get (同步请求)
+  template&lt;typename PARAMS&gt;
+  uint32_t Get(waitTime, method, params);
+
+  // Thunder → Dispatch (异步请求 + 回调)
+  template&lt;typename HANDLER&gt;
+  uint32_t Dispatch(waitTime, method, callback, object);
+
+  // Subscribe (订阅事件)
+  template&lt;typename INBOUND&gt;
+  uint32_t Subscribe(waitTime, eventName, method, object);
+
+  // 此外：环境变量重写 (COBALT_ENABLE_OVERRIDES)
+  // 如果设置了，可以从环境变量读取 JSON 响应
+  // 用于测试 —— 无需真实 Thunder 即可模拟
+};</code></pre>
+
+<h2>2. 焦点管理 — RDKShell</h2>
+
+<p>在 Lesson 1 中我们看到 <code>Application</code> 持有 <code>amlshellinfo_</code> 并在 GetFocusStatus/GetFocusAppName 中使用它。这里就是其实现：</p>
+
+<pre><code>--- rdkservices.cc:278-363 ---
+
+struct RDKShellInfoImpl {
+  ServiceLink rdkshellinfo_link_ { "org.rdk.RDKShell.1" };
+  bool   focus_status_ {false};
+  string appName_;          // 自身 app 名 (来自 CLIENT_IDENTIFIER)
+  string focusAppName_;     // 当前焦点 app
+
+  RDKShellInfoImpl() {
+    // 1. 从环境变量获取自身 app 名
+    appName_ = getenv("CLIENT_IDENTIFIER");  // 转为小写
+
+    // 2. 查询当前焦点
+    Get("getFocused") → 如果自己就是焦点 → SendFocusEvent()
+
+    // 3. 订阅焦点变化事件
+    Subscribe("onApplicationFocusChanged", onFocusStatus);
+  }
+
+  void onFocusStatus(JsonObject data) {
+    if (焦点转移到自己 && !focus_status_)
+      → SbEventSchedule(SendFocusEvent, 0)       // 获得焦点
+    else if (焦点转移走 && focus_status_)
+      → SbEventSchedule(SendBlurEvent, 0)        // 失去焦点
+  }
+};</code></pre>
+
+<p>关键时序：App 启动时先查询当前焦点状态，然后订阅后续变化事件。</p>
+
+<div class="callout">
+<div class="callout-title">🔑 事件注入模式</div>
+<code>SbEventSchedule(callback, 0)</code> 被用来将焦点事件注入到 Cobalt 主线程的事件队列中。这是一个典型的<strong>线程切换</strong>模式——RDK 的回调在 Thunder 的线程中触发，通过 SbEventSchedule 安全地切换到 Application 的 Starboard 事件循环。
+</div>
+
+<h2>3. 焦点在 Application 中的使用</h2>
+
+<p>RDKShellInfo 的焦点状态在 Application 中被用于两个关键地方：</p>
+
+<pre><code>--- application_aml.cc:388-393 ---
+
+bool Application::GetFocusStatus() const {
+  return amlshellinfo_-&gt;ImpGetFocusStatus();
+}
+std::string Application::GetFocusAppName() const {
+  return amlshellinfo_-&gt;ImpGetFocusAppName();
+}</code></pre>
+
+<p>这些被 <strong>HdcpService</strong> 使用：</p>
+
+<pre><code>--- aml_platform.cc:396-424 ---
+
+SetFreeze(freeze) {
+  if (不冻结 && (!GetFocusStatus() && appName != "launcher")) {
+    跳过 HDCP 处理  // 不是焦点 app 且不是 launcher → 不处理
+  }
+  if (不冻结)
+    → SendUnfreezeEvent + SendRevealEvent + SendFocusEvent
+  else
+    → SendBlurEvent + SendConcealEvent + SendFreezeEvent
+}</code></pre>
+
+<p>这就是完整的 HDCP 保护链路：</p>
+
+<pre><code>HDMI 拔出
+  → udev event
+    → HdcpService::onEvent()
+      → SetFreeze(true)
+        → SendBlurEvent + SendConcealEvent + SendFreezeEvent
+
+HDMI 插入 + HDCP 验证通过
+  → udev event
+    → HdcpService::onEvent()
+      → SetFreeze(false)
+        → SendUnfreezeEvent + SendRevealEvent + SendFocusEvent</code></pre>
+
+<h2>4. TTS — Text-to-Speech</h2>
+
+<p>TextToSpeech 是一个独立的 RDK 服务，通过 Thunder 通信：</p>
+
+<pre><code>--- rdkservices.cc:140-276 ---
+
+struct TextToSpeechImpl {
+  ServiceLink tts_link_ { "org.rdk.TextToSpeech.1" };
+  atomic_bool is_enabled_;
+
+  TextToSpeechImpl() {
+    Subscribe("onttsstatechanged", OnStateChanged);
+    Get("isttsenabled") → 设置 is_enabled_
+  }
+
+  void Speak(text) {
+    Dispatch("speak", params, OnSpeakResult);
+  }
+
+  void Cancel() {
+    Dispatch("cancel", params, OnCancelResult);
+  }
+};</code></pre>
+
+<p>在 Starboard 层被 <code>speech_synthesis_speak.cc</code> 调用：</p>
+
+<pre><code>--- speech_synthesis_speak.cc ---
+
+void SbSpeechSynthesisSpeak(const char* text) {
+  TextToSpeech::Speak(text);
+}</code></pre>
+
+<p>同样，<code>speech_synthesis_cancel.cc</code> 和 <code>accessibility_get_text_to_speech_settings.cc</code> 也通过 <code>TextToSpeech</code> 实现。</p>
+
+<h2>5. ServiceLink 的两个隐藏特性</h2>
+
+<h3>5.1 环境变量重写</h3>
+
+<pre><code>--- rdkservices.cc:66-103 ---
+
+enableEnvOverrides():
+  如果 COBALT_ENABLE_OVERRIDES=1
+  Get(method) 时，先检查环境变量 "{Callsign}_{method}"
+  如果存在，直接解析环境变量 JSON 作为返回
+
+  例如: org_rdk_RDKShell_1_getFocused={"client": "cobalt"}</code></pre>
+
+<p>这允许在 <strong>没有真实 Thunder 的环境</strong> 中调试——非常实用的嵌入式开发技巧。</p>
+
+<h3>5.2 THUNDER_ACCESS 环境变量</h3>
+
+<pre><code>ServiceLink(callsign) {
+  if (getenv("THUNDER_ACCESS") != nullptr)
+    link_ = new JSONRPC::Link(callsign);
+  // 否则 link_ 为空，所有操作返回 UNAVAILABLE
+}</code></pre>
+
+<p>如果没有设置 <code>THUNDER_ACCESS</code>，Cobalt 可以运行但所有 RDK 服务都不可用。</p>
+
+<h2>6. 本课在整体架构中的位置</h2>
+
+<div class="diagram">
+HDMI Hotplug / CEC / Network        RDK Shell (WPEFramework)
+    │                                       │
+    ▼                                       ▼
+Amlogic::Platform::Event             JSON-RPC WebSocket
+    │                                       │
+    ▼                                       ▼
+aml_platform.cc:                    rdkservices.cc:
+  HdcpService::onEvent()              RDKShellInfo (焦点)
+  NetworkService::onEvent()           TextToSpeech (TTS)
+  CecEventHandle::onEvent()                  │
+    │                                       │
+    ▼                                       ▼
+Application::SendBlurEvent()          Application::GetFocusStatus()
+Application::SendFreezeEvent()        Application::GetFocusAppName()
+Application::SendFocusEvent()
+    │
+    ▼
+Cobalt Application State Machine</div>
+
+<p>RDK 服务与 Amlogic::Platform 服务（Lesson 1）是两个独立的事件源，最终都在 Application 层汇合。</p>
+
+<h2>7. 动手练习</h2>
+<ol>
+  <li>在 <code>rdkservices.cc</code> 中找到 <code>ServiceLink</code> 的 <code>Subscribe</code> 方法调用，列出所有被订阅的事件</li>
+  <li>追踪 <code>SendFocusEvent</code> 到 Starboard 事件队列的路径</li>
+  <li>理解 <code>GetDisplayResolution()</code> 在 Lesson 1 (DeviceInfoService) 和 Lesson 4 (Media) 之间的链路</li>
+  <li>查看 <code>speech_synthesis_speak.cc</code> 和 <code>accessibility_get_text_to_speech_settings.cc</code> 如何通过 TextToSpeech 与 RDK 通信</li>
+</ol>
+
+<h2>8. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (HdcpService 反向路径)</li>
+  <li><a href="0002-player-module-deep-dive.html">第二课: Player 模块</a> (ForceStop)</li>
+  <li>WPEFramework 文档: <a href="https://github.com/rdkcentral/Thunder">github.com/rdkcentral/Thunder</a></li>
+</ul>
+
+
+
+<div class="footer">
+Lesson 0005 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>

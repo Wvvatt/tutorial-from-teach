@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 0004: Media 模块 — 编解码器能力检测</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #1a1a2e;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: #fafafa;
+  }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.3rem; color: #111; }
+  .subtitle { font-size: 1rem; color: #666; margin-bottom: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 1rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.8rem; color: #2563eb; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; margin-bottom: 0.5rem; color: #1a1a2e; }
+  p, li { color: #374151; }
+  p { margin-bottom: 0.8rem; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+  li { margin-bottom: 0.25rem; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+    background: #f1f5f9;
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: #1e293b;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.95rem;
+  }
+  .callout-title { font-weight: 600; color: #1e40af; margin-bottom: 0.2rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.2rem;
+    margin: 1rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: #f8fafc; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  details { margin: 1rem 0; }
+  details summary { cursor: pointer; color: #2563eb; font-weight: 500; padding: 0.4rem 0.6rem; background: #f0f4ff; border-radius: 6px; }
+  details summary:hover { background: #dbeafe; }
+  details .answer { padding: 1rem 1.2rem; margin-top: 0.5rem; background: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 8px 8px 0; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Lesson 0004: Media 模块 — 编解码器能力检测</h1>
+<p class="subtitle">嵌入式媒体平台开发 · 第四课</p>
+
+<p>前三课我们学习了 Player 和 DRM——播放和解密。这一课后退一步，看看 <strong>Media 模块</strong>（19 个文件）：Cobalt 在创建 Player 之前如何判断设备能播什么。它是整个媒体管线的<strong>看门人</strong>。</p>
+
+<h2>1. 模块全景</h2>
+
+<p>Media 模块的 19 个文件分三类：</p>
+
+<table>
+<tr><th>类别</th><th>文件</th><th>职责</th></tr>
+<tr><td rowspan="4">编解码器支持</td><td><code>media_is_supported.cc</code></td><td>整体编解码器 + DRM 支持判定</td></tr>
+<tr><td><code>media_is_video_supported.cc</code></td><td>视频编码 + 分辨率 + HDR 判定</td></tr>
+<tr><td><code>media_is_audio_supported.cc</code></td><td>音频编码 + Dolby 支持判定</td></tr>
+<tr><td><code>gst_media_utils.cc/.h</code></td><td>GStreamer Registry 查询 + Codec→Caps 映射</td></tr>
+<tr><td rowspan="2">传输特性</td><td><code>media_is_transfer_characteristics_supported.cc</code></td><td>HDR 传输特性支持</td></tr>
+<tr><td><code>media_is_output_protected.cc</code></td><td>输出保护状态</td></tr>
+<tr><td rowspan="10">缓冲区配置</td><td><code>media_get_initial_buffer_capacity.cc</code></td><td>初始缓冲区容量</td></tr>
+<tr><td><code>media_get_buffer_allocation_unit.cc</code></td><td>缓冲分配单元</td></tr>
+<tr><td><code>media_get_buffer_alignment.cc</code></td><td>缓冲区对齐 128 字节</td></tr>
+<tr><td><code>media_get_buffer_padding.cc</code></td><td>缓冲区填充</td></tr>
+<tr><td><code>media_get_buffer_storage_type.cc</code></td><td>存储类型（内存池）</td></tr>
+<tr><td><code>media_get_max_buffer_capacity.cc</code></td><td>最大缓冲区容量</td></tr>
+<tr><td><code>media_get_video_buffer_budget.cc</code></td><td>视频缓冲区预算</td></tr>
+<tr><td><code>media_get_audio_buffer_budget.cc</code></td><td>音频缓冲区预算</td></tr>
+<tr><td><code>media_get_progressive_buffer_budget.cc</code></td><td>渐进式缓冲预算</td></tr>
+<tr><td><code>media_is_buffer_pool_allocate_on_demand.cc</code></td><td>按需分配</td></tr>
+</table>
+
+<div class="callout">
+<div class="callout-title">🔑 设计模式</div>
+每个文件只导出一个 Starboard API 函数（如 <code>SbMediaIsVideoSupported</code>）。这是 Starboard 推荐的"每函数一文件"风格，方便平台按需替换实现。
+</div>
+
+<h2>2. 编解码器支持检测</h2>
+
+<p>Cobalt 创建 Player 之前，会调用 <code>SbMediaIsVideoSupported</code> 和 <code>SbMediaIsAudioSupported</code> 判断传入的编解码器是否能播。AML 的实现由浅到深分三层：</p>
+
+<h3>2.1 GStreamer Registry 查询</h3>
+
+<pre><code>--- gst_media_utils.cc:68-139 ---
+
+GstRegistryHasElementForCodec(codec):
+  1. 获取系统所有 PARSER + decoder 工厂列表
+     (按 codec 类型过滤 VIDEO/AUDIO, 编译时缓存)
+
+  2. CodecToGstCaps(codec)  →  例如 "video/x-h264, stream-format=byte-stream, alignment=nal"
+
+  3. gst_element_factory_list_filter(decoders, caps, SINK)
+     → 能找到 decoder → 返回 true
+
+  4. 找不到 decoder → 找 parser
+     parser_src_caps → gst_element_factory_list_filter(decoders, caps, SINK)
+     → 能找到 parser + decoder 链 → 返回 true
+
+  5. 都找不到 → 返回 false</code></pre>
+
+<p>关键设计：<strong>编译时缓存</strong>工厂列表 (<code>static UniqueFeatureList parser_factories</code>)，避免每次查询都遍历 GStreamer registry——性能优化。</p>
+
+<h3>2.2 Codec → GstCaps 映射</h3>
+
+<pre><code>--- gst_media_utils.cc:153-229 ---
+
+Video:                Audio:
+H264  → video/x-h264  AAC   → audio/mpeg, mpegversion=4
+H265  → video/x-h265          (+ channels, rate if info available)
+VP9   → video/x-vp9   Opus  → audio/x-opus, channel-mapping-family=0
+AV1   → video/x-av1          (+ 解析 audio_specific_config 生成 caps)
+VP8   → video/x-vp8   Vorbis→ audio/x-vorbis
+Mpeg2 → video/mpeg     AC3/EAC3 → audio/x-eac3
+Theora→ video/x-theora
+VC1   → video/x-vc1</code></pre>
+
+<h3>2.3 视频能力判定 (SbMediaIsVideoSupported)</h3>
+
+<pre><code>--- media_is_video_supported.cc:42-94 ---
+
+SbMediaIsVideoSupported(video_codec, frame_width, frame_height, ...):
+
+  1. decode_to_texture_required? → false (AML 不支持)
+
+  2. COBALT_SUPPORT_AV1=n? → AV1 不支持 (环境变量覆盖)
+
+  3. 分辨率超出屏幕? → false
+     Application::Get()-&gt;GetDisplayResolution()
+
+  4. HDR 传输特性不在白名单?
+     (Bt709 / SMPTE ST 2084 / ARIB STD B67) → false
+
+  5. HDR 视频但显示器不支持? → false
+     Application::Get()-&gt;DisplayHasHDRSupport()
+
+  6. 最终白名单:
+     codec ∈ {H264, VP9, AV1} && fps ≤ 60</code></pre>
+
+<div class="callout">
+<div class="callout-title">🔑 DeviceInfoService 的集成</div>
+第 3、5 步中，<code>SbMediaIsVideoSupported</code> 通过 <code>Application::Get()-&gt;GetDisplayResolution()</code> 和 <code>DisplayHasHDRSupport()</code> 调用 DeviceInfoService。这正是 Lesson 1 中"正向路径"的实例——Media API 在 Cobalt 主线程上主动查询 Service 层。
+</div>
+
+<h3>2.4 音频能力判定 (SbMediaIsAudioSupported)</h3>
+
+<pre><code>--- media_is_audio_supported.cc:59-74 ---
+
+SbMediaIsAudioSupported(audio_codec, bitrate):
+
+  1. AC3/EAC3? → 检查 ENABLE_DOLBY 环境变量 (设备属性)
+     默认支持，COBALT_FORCE_SUPPORT_xxx 风格
+
+  2. bitrate &lt; kSbMediaMaxAudioBitrateInBitsPerSecond
+     && GstRegistryHasElementForMediaType(audio_codec)</code></pre>
+
+<h2>3. DRM 与 Media 的交汇</h2>
+
+<pre><code>--- media_is_supported.cc:92-100 ---
+
+SbMediaIsSupported(video_codec, audio_codec, key_system):
+  return DrmSystemWidevine::IsKeySystemSupported(key_system, video_mime)
+      && DrmSystemWidevine::IsKeySystemSupported(key_system, audio_mime)</code></pre>
+
+<p><code>SbMediaIsSupported</code> 是 Cobalt 在 <code>SbPlayerCreate</code> 之前调用的"全局"检查，确保 DRM 系统声明支持该编码的 MIME 类型。而后续的 <code>SbMediaIsVideoSupported</code> 和 <code>SbMediaIsAudioSupported</code> 是更细粒度的能力检查。</p>
+
+<p>它们的关系：</p>
+<pre><code>Cobalt EME 选择流
+  → SbMediaIsSupported(codecs, key_system)
+    → DRM 是否支持这些 codec?               ← 全局
+  → SbMediaIsVideoSupported(codec, w, h, ...)
+    → 分辨率、HDR、白名单检查                ← 视频细粒度
+  → SbMediaIsAudioSupported(codec, bitrate)
+    → Dolby、GStreamer decoder、码率检查     ← 音频细粒度
+  → SbPlayerCreate(...)
+    → GstRegistryHasElementForMediaType()    ← 最终确认
+      → PlayerImpl 构造函数</code></pre>
+
+<h2>4. 缓冲区配置</h2>
+
+<p>剩余的 10 个 <code>media_get_*</code> 文件返回 Cobalt 内存管理的常量值：</p>
+
+<table>
+<tr><th>函数</th><th>AML 返回值</th><th>含义</th></tr>
+<tr><td><code>SbMediaGetInitialBufferCapacity</code></td><td>0</td><td>不预分配</td></tr>
+<tr><td><code>SbMediaGetBufferAllocationUnit</code></td><td>1MB</td><td>缓冲分配粒度</td></tr>
+<tr><td><code>SbMediaGetBufferAlignment</code></td><td>128</td><td>128 字节对齐（decoder 需求）</td></tr>
+<tr><td><code>SbMediaGetBufferPadding</code></td><td>1MB</td><td>缓冲区尾部填充</td></tr>
+<tr><td><code>SbMediaGetBufferStorageType</code></td><td>MEMORY_POOL</td><td>使用内存池管理</td></tr>
+<tr><td><code>SbMediaGetMaxBufferCapacity</code></td><td>64MB (or custom)</td><td>最大缓冲上限</td></tr>
+<tr><td><code>SbMediaGetVideoBufferBudget</code></td><td>48MB (or custom)</td><td>视频缓冲预算</td></tr>
+<tr><td><code>SbMediaGetAudioBufferBudget</code></td><td>6MB (or custom)</td><td>音频缓冲预算</td></tr>
+<tr><td><code>SbMediaGetProgressiveBufferBudget</code></td><td>12MB (or custom)</td><td>渐进式缓冲预算</td></tr>
+<tr><td><code>SbMediaIsBufferPoolAllocateOnDemand</code></td><td>true</td><td>按需分配，不提前预分配</td></tr>
+</table>
+
+<p>这些值直接影响 Cobalt 的内存管理和播放流畅度——缓冲区太小可能导致频繁 rebuffer，太大则浪费内存。</p>
+
+<h2>5. 本节在整体架构中的位置</h2>
+
+<div class="diagram">
+Cobalt EME / Media Pipeline
+    │
+    ├── SbMediaIsSupported()           ← 检查 DRM+codec 兼容性
+    ├── SbMediaIsVideoSupported()      ← 检查分辨率/HDR
+    ├── SbMediaIsAudioSupported()      ← 检查 Dolby/GStreamer
+    │
+    │  (全部通过)
+    ▼
+SbPlayerCreate()
+    → player_create.cc：再次 GstRegistryHasElement
+    → PlayerImpl 构造函数
+    → GStreamer pipeline 创建</div>
+
+<p>Media 模块是 Player 的<strong>前置检查</strong>。它确保在创建 GStreamer pipeline 之前，设备确实支持该媒体格式。重复检查（<code>player_create.cc</code> 中也调用 <code>GstRegistryHasElement</code>）是防御性设计——双重验证。</p>
+
+<h2>6. 动手练习</h2>
+<ol>
+  <li>在 <code>gst_media_utils.cc</code> 中找到 <code>static</code> 缓存的工厂列表，理解它的生命周期和线程安全性</li>
+  <li>查看 <code>media_get_video_buffer_budget.cc</code>，了解 AML 如何处理默认值和自定义值</li>
+  <li>在 <code>media_is_video_supported.cc</code> 中追踪 <code>Application::Get()-&gt;GetDisplayResolution()</code> 到 DeviceInfoService 的调用链</li>
+  <li>比较 <code>SbMediaIsSupported</code> 和 <code>SbMediaIsVideoSupported</code> 的参数和调用时机差异</li>
+</ol>
+
+<h2>7. 推荐阅读</h2>
+<ul>
+  <li><a href="../reference/0001-glossary.html">术语表</a></li>
+  <li><a href="0001-aml-starboard-architecture-overview.html">第一课: 架构导览</a> (DeviceInfoService 正向路径)</li>
+  <li><a href="0002-player-module-deep-dive.html">第二课: Player 模块</a> (player_create.cc 的重复检查)</li>
+  <li><a href="0003-widevine-drm.html">第三课: Widevine DRM</a> (SbMediaIsSupported 的 DRM 路径)</li>
+</ul>
+
+<details>
+<summary>为什么 Media 模块的检查在 PlayerCreate 中还要再做一次？</summary>
+<div class="answer">
+<p><code>SbMediaIsVideoSupported</code> 等函数在 Cobalt 上层被调用，用于 UI 决策（如隐藏不支持的清晰度选项）。但<strong>最终裁决</strong>在 <code>SbPlayerCreate</code> 中——如果 GStreamer 运行时环境发生变化（比如 codec 插件被卸载），PlayerCreate 会返回 <code>kSbPlayerInvalid</code>。</p>
+<p>这是防御性设计：上层检查用于用户体验，下层检查是最终的安全网。</p>
+</div>
+</details>
+
+<div class="footer">
+Lesson 0004 · 2026-06-16 · <a href="../MISSION.md">MISSION.md</a>
+</div>
+
+</body>
+</html>
