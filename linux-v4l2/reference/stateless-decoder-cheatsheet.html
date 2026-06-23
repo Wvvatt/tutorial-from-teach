@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stateless Decoder 速查表</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  @page { size: A4; margin: 12mm; }
+
+  :root {
+    --text: #222;
+    --bg: #fff;
+    --accent: #1a5276;
+    --code-bg: #f5f3ef;
+    --border: #ddd;
+    --sans: 'IBM Plex Sans', -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    font-size: 10pt;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+
+  h1 {
+    font-size: 16pt;
+    font-weight: 600;
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.3rem;
+    margin-bottom: 1rem;
+  }
+
+  h2 {
+    font-size: 12pt;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 1.2rem 0 0.5rem 0;
+    page-break-after: avoid;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 9pt;
+    background: var(--code-bg);
+    padding: 0.1em 0.3em;
+    border-radius: 2px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 8.5pt;
+    background: var(--code-bg);
+    padding: 0.6rem 0.8rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    line-height: 1.45;
+    margin: 0.5rem 0;
+    page-break-inside: avoid;
+  }
+
+  pre code { background: none; padding: 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+
+  table th {
+    background: var(--code-bg);
+    padding: 0.4rem 0.5rem;
+    text-align: left;
+    font-weight: 500;
+    border-bottom: 2px solid var(--accent);
+  }
+
+  table td {
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  table tr:nth-child(even) td { background: #fafaf8; }
+
+  ol, ul {
+    margin-left: 1.2rem;
+    margin-bottom: 0.5rem;
+    font-size: 9.5pt;
+  }
+
+  li { margin-bottom: 0.2rem; }
+
+  .note {
+    background: #eaf2f8;
+    border-left: 3px solid var(--accent);
+    padding: 0.4rem 0.6rem;
+    margin: 0.5rem 0;
+    border-radius: 0 3px 3px 0;
+    font-size: 9pt;
+    page-break-inside: avoid;
+  }
+
+  .warn {
+    background: #fef9e7;
+    border-left: 3px solid #f39c12;
+    padding: 0.4rem 0.6rem;
+    margin: 0.5rem 0;
+    border-radius: 0 3px 3px 0;
+    font-size: 9pt;
+    page-break-inside: avoid;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 0.5rem 0;
+    page-break-inside: avoid;
+  }
+
+  footer {
+    margin-top: 1.5rem;
+    font-size: 8pt;
+    color: #999;
+    border-top: 1px solid var(--border);
+    padding-top: 0.5rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Stateless Decoder 速查表</h1>
+
+<section>
+  <h2>初始化序列</h2>
+  <ol>
+    <li><code>S_FMT(OUTPUT)</code> — 设置 coded format（如 <code>V4L2_PIX_FMT_H264_SLICE</code>）</li>
+    <li><code>S_EXT_CTRLS</code> — 设置初始化参数（profile/level 等）</li>
+    <li><code>G_FMT(CAPTURE)</code> — 获取推荐 CAPTURE 格式</li>
+    <li><code>[S_FMT(CAPTURE)]</code> — 可选：选择不同 raw format</li>
+    <li><code>REQBUFS(OUTPUT)</code></li>
+    <li><code>REQBUFS(CAPTURE)</code></li>
+    <li><code>MEDIA_IOC_REQUEST_ALLOC</code> — 分配 request（通常每 OUTPUT buffer 一个）</li>
+    <li><code>STREAMON(OUTPUT)</code> + <code>STREAMON(CAPTURE)</code></li>
+  </ol>
+</section>
+
+<section>
+  <h2>每帧解码循环（核心伪代码）</h2>
+  <pre><code>// 对每一帧：
+struct v4l2_buffer out = {
+    .type = OUTPUT_MPLANE, .index = idx,
+    .bytesused  = frame_size,
+    .flags      = V4L2_BUF_FLAG_REQUEST_FD,
+    .request_fd = req_fd,           // 关联到 request
+    .timestamp  = frame_ts,          // 唯一 ID，会传播到 CAPTURE
+};
+ioctl(fd, VIDIOC_QBUF, &out);
+
+struct v4l2_ext_controls ctrls = {
+    .which      = V4L2_CTRL_WHICH_REQUEST_VAL,
+    .request_fd = req_fd,
+    .count      = n,
+    .controls   = ctrl_array,       // SPS/PPS/SliceParams/DecodeParams/...
+};
+ioctl(fd, VIDIOC_S_EXT_CTRLS, &ctrls);
+
+ioctl(req_fd, MEDIA_REQUEST_IOC_QUEUE);   // 原子提交
+
+// 取结果（CAPTURE buffer 不在 request 中，独立出队）
+ioctl(fd, VIDIOC_DQBUF, &capture_buf);</code></pre>
+</section>
+
+<section>
+  <h2>Request API 关键 ioctl</h2>
+  <table>
+    <tr><th>操作</th><th>调用</th><th>返回值</th></tr>
+    <tr><td>分配</td><td><code>ioctl(media_fd, MEDIA_IOC_REQUEST_ALLOC, &req_fd)</code></td><td>req_fd</td></tr>
+    <tr><td>提交</td><td><code>ioctl(req_fd, MEDIA_REQUEST_IOC_QUEUE)</code></td><td>0 on success</td></tr>
+    <tr><td>等待</td><td><code>poll(&pfd, 1, -1)</code> with <code>POLLPRI</code></td><td>ready</td></tr>
+    <tr><td>查询</td><td><code>G_EXT_CTRLS</code> on <code>req_fd</code> (completed only)</td><td>controls 值</td></tr>
+    <tr><td>重用</td><td><code>ioctl(req_fd, MEDIA_REQUEST_IOC_REINIT)</code></td><td>0 on success</td></tr>
+    <tr><td>销毁</td><td><code>close(req_fd)</code></td><td>—</td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>约束：</strong>至少 1 个 OUTPUT buffer 才能 QUEUE（否则 -ENOENT）。只能有 1 个 OUTPUT buffer（多个 -EINVAL）。CAPTURE buffer 不能进入 request。
+  </div>
+</section>
+
+<section>
+  <h2>HOLD_CAPTURE_BUF — 多 Slice 处理</h2>
+  <table>
+    <tr><th>条件</th><th>标志</th><th>timestamp</th></tr>
+    <tr><td>非最后一个 slice</td><td><code>REQUEST_FD | HOLD_CAPTURE_BUF</code></td><td>同帧 ID</td></tr>
+    <tr><td>最后一个 slice</td><td><code>REQUEST_FD</code></td><td>同帧 ID</td></tr>
+    <tr><td>单 slice 帧</td><td><code>REQUEST_FD</code></td><td>帧 ID</td></tr>
+  </table>
+  <div class="note">相同 timestamp 的多个 OUTPUT buffer 共用同一个 CAPTURE buffer。timestamp 变更时，之前的 CAPTURE 自动完成出队。</div>
+</section>
+
+<section>
+  <h2>Stateful vs Stateless 速查</h2>
+  <table>
+    <tr><th></th><th>Stateful</th><th>Stateless</th></tr>
+    <tr><td>DPB</td><td>驱动管理</td><td>用户通过 controls 管理</td></tr>
+    <tr><td>码流解析</td><td>驱动</td><td>用户（传 SPS/PPS 等为 controls）</td></tr>
+    <tr><td>coded fmt</td><td><code>V4L2_PIX_FMT_H264</code></td><td><code>V4L2_PIX_FMT_H264_SLICE</code></td></tr>
+    <tr><td>要 Request</td><td>不需要</td><td>必须</td></tr>
+    <tr><td>DRC</td><td><code>SOURCE_CHANGE</code> 事件通知</td><td>用户检测 → STREAMOFF 重配</td></tr>
+    <tr><td>Drain</td><td><code>DEC_CMD_STOP</code> + <code>FLAG_LAST</code></td><td><code>DEC_CMD_FLUSH</code> + 等完成</td></tr>
+    <tr><td>用户复杂度</td><td>低</td><td>高</td></tr>
+    <tr><td>硬件复杂度</td><td>高</td><td>低</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>常用 Coded Format 对照</h2>
+  <div class="two-col">
+    <div>
+      <strong>Stateless (_SLICE / _FRAME)</strong>
+      <ul>
+        <li><code>V4L2_PIX_FMT_H264_SLICE</code></li>
+        <li><code>V4L2_PIX_FMT_H265_SLICE</code></li>
+        <li><code>V4L2_PIX_FMT_VP8_FRAME</code></li>
+        <li><code>V4L2_PIX_FMT_VP9_FRAME</code></li>
+        <li><code>V4L2_PIX_FMT_MPEG2_SLICE</code></li>
+      </ul>
+    </div>
+    <div>
+      <strong>Stateful (无后缀)</strong>
+      <ul>
+        <li><code>V4L2_PIX_FMT_H264</code></li>
+        <li><code>V4L2_PIX_FMT_HEVC</code></li>
+        <li><code>V4L2_PIX_FMT_VP8</code></li>
+        <li><code>V4L2_PIX_FMT_VP9</code></li>
+        <li><code>V4L2_PIX_FMT_MPEG2</code></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>DRC（Dynamic Resolution Change）— Stateless 版本</h2>
+  <ol>
+    <li>如有 held CAPTURE buffer → <code>V4L2_DEC_CMD_FLUSH</code></li>
+    <li>等待所有 pending request 完成并 DQBUF</li>
+    <li><code>STREAMOFF(OUTPUT)</code> + <code>STREAMOFF(CAPTURE)</code></li>
+    <li><code>REQBUFS(CAPTURE, count=0)</code> — 释放 CAPTURE buffer</li>
+    <li>用新分辨率重新执行初始化序列（OUTPUT buffer 可以保留不重新分配）</li>
+  </ol>
+</section>
+
+<footer>
+  Based on <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-stateless-decoder.html">Linux Kernel Stateless Decoder Documentation</a>
+  and <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/mediactl/request-api.html">Request API Documentation</a>.
+  Part of the V4L2 learning track.
+</footer>
+
+</body>
+</html>

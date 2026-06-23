@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 4: V4L2 调试工具实战</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --text: #222;
+    --bg: #faf9f7;
+    --accent: #1a5276;
+    --accent-light: #2980b9;
+    --code-bg: #f0ede8;
+    --border: #ddd;
+    --success: #27ae60;
+    --error: #c0392b;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', 'Fira Code', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    font-weight: 350;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 1.5rem;
+  }
+
+  header .lesson-num {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header .subtitle {
+    font-size: 0.95rem;
+    color: #555;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 2rem 0 0.75rem 0;
+    padding-top: 1rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--accent-light);
+    margin: 1.5rem 0 0.5rem 0;
+  }
+
+  p { margin-bottom: 1rem; }
+
+  a {
+    color: var(--accent-light);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  a:hover { border-bottom-color: var(--accent-light); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    background: #282c34;
+    color: #abb2bf;
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.5;
+  }
+
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+  pre .cmd { color: #98c379; }
+  pre .opt { color: #e5c07b; }
+  pre .val { color: #d19a66; }
+  pre .cmt { color: #5c6370; font-style: italic; }
+
+  .info-box {
+    background: #eaf2f8;
+    border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .info-box strong { color: var(--accent); }
+
+  .warn-box {
+    background: #fef9e7;
+    border-left: 3px solid #f39c12;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .quiz {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .quiz p.quiz-q {
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .quiz .option {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    font-size: 0.92rem;
+  }
+
+  .quiz .option:hover { background: #f5f3ef; }
+  .quiz .option.selected { border-color: var(--accent-light); background: #eaf2f8; }
+  .quiz .option.correct { border-color: var(--success); background: #eafaf1; }
+  .quiz .option.wrong { border-color: var(--error); background: #fdedec; }
+
+  .quiz .feedback {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    display: none;
+  }
+
+  .quiz .feedback.show { display: block; }
+  .quiz .feedback.correct { background: #eafaf1; color: #1e8449; }
+  .quiz .feedback.wrong { background: #fdedec; color: #922b21; }
+
+  .cmd-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .cmd-card h3 {
+    margin-top: 0;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--accent);
+  }
+
+  .cmd-card pre {
+    margin: 0.5rem 0 0 0;
+  }
+
+  .cmd-card .desc {
+    color: #888;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+
+  table th {
+    background: var(--code-bg);
+    padding: 0.5rem 0.7rem;
+    text-align: left;
+    font-weight: 500;
+    border-bottom: 2px solid var(--accent);
+  }
+
+  table td {
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0 1.5rem 0;
+  }
+
+  .next-steps ul { margin: 0.5rem 0 1rem 1.5rem; }
+  .next-steps li { margin-bottom: 0.35rem; }
+
+  footer {
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    color: #888;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+
+  .workflow {
+    counter-reset: wf;
+    margin: 1.5rem 0;
+  }
+
+  .workflow > div {
+    counter-increment: wf;
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid #f0ede8;
+  }
+
+  .workflow > div::before {
+    content: counter(wf);
+    flex-shrink: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    margin-top: 0.15rem;
+  }
+
+  .workflow code { font-size: 0.82em; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<header>
+  <div class="lesson-num">Lesson 4</div>
+  <h1>V4L2 调试工具实战</h1>
+  <div class="subtitle">掌握 v4l2-ctl、v4l2-compliance、vivid/vicodec 虚拟驱动——无需真实硬件即可演练 V4L2</div>
+</header>
+
+<nav style="margin: 0 0 2rem 0; font-size: 0.85rem; color: #888;">
+  ← <a href="0003-Stateless-Decoder-Request-API.html">Lesson 3: Stateless Decoder &amp; Request API</a>
+  &nbsp;|&nbsp;
+  <a href="0001-V4L2-Overview.html">Lesson 1</a>
+  · <a href="0002-Stateful-Decoder-State-Machine.html">Lesson 2</a>
+</nav>
+
+<section>
+  <h2>0. 环境准备</h2>
+
+  <p>如果你有一台 Linux 机器（含内核 5.x+），安装 v4l-utils：</p>
+
+  <pre><code><span class="cmt"># Debian/Ubuntu</span>
+sudo apt install v4l-utils
+
+<span class="cmt"># Fedora</span>
+sudo dnf install v4l-utils
+
+<span class="cmt"># Arch</span>
+sudo pacman -S v4l-utils</code></pre>
+
+  <p>如果你在 macOS（像本课程的目标环境），需要借助 QEMU 运行 Linux VM。最简单的方案：</p>
+
+  <pre><code><span class="cmt"># 用 Ubuntu Cloud Image + QEMU（详见下一节）</span>
+<span class="cmt"># 或使用 multipass:</span>
+multipass launch --name v4l2-lab --cpus 2 --mem 2G --disk 10G
+multipass shell v4l2-lab
+<span class="cmt"># 在 VM 中:</span>
+sudo apt update && sudo apt install v4l-utils linux-modules-extra-$(uname -r)</code></pre>
+
+  <div class="info-box">
+    <strong>本课可以只读不练。</strong>所有命令和输出都已展示，作为你登录 Linux 时的操作手册。核心目标：让你<strong>看懂</strong> v4l2-ctl 的输出、会用 v4l2-compliance 排查问题。
+  </div>
+</section>
+
+<section>
+  <h2>1. v4l2-ctl：瑞士军刀</h2>
+
+  <p><code>v4l2-ctl</code> 是 v4l-utils 中的核心工具，覆盖了几乎所有 V4L2 ioctl 的命令行包装。下面按使用场景归类。</p>
+
+  <h3>1.1 设备发现</h3>
+
+  <div class="cmd-card">
+    <h3>列出所有 V4L2 设备</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">--list-devices</span></code></pre>
+    <div class="desc">输出每个 /dev/videoX 节点的设备名和路径。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>查看设备详细信息</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--all</span></code></pre>
+    <div class="desc">一口气输出：driver/card/bus info、所有 format、controls、selection rectangles 等。最常用的排查命令。</div>
+  </div>
+
+  <h3>1.2 格式操作</h3>
+
+  <div class="cmd-card">
+    <h3>列出 CAPTURE 支持的格式</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--list-formats</span></code></pre>
+    <div class="desc">输出如 <code>[0]: 'H264' (H.264, compressed)</code> — 索引、FourCC、描述。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>列出 OUTPUT 支持的格式（decoder 关键！）</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--list-formats-out</span></code></pre>
+    <div class="desc">decoder 的 OUTPUT queue 是 coded format 入口，用这个查看支持哪些编码格式。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>获取/设置 OUTPUT 格式</h3>
+    <pre><code><span class="cmt"># 获取当前 OUTPUT 格式</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--get-fmt-video-out</span>
+
+<span class="cmt"># 设置 OUTPUT 为 H.264 1920x1080</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--set-fmt-video-out</span> \
+  <span class="val">width=1920,height=1080,pixelformat=H264</span></code></pre>
+    <div class="desc">这等同于 <code>S_FMT(OUTPUT)</code>。对应 stateful decoder 初始化第一步。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>获取/设置 CAPTURE 格式</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--get-fmt-video</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--set-fmt-video</span> \
+  <span class="val">width=1920,height=1088,pixelformat=NV12</span></code></pre>
+  </div>
+
+  <h3>1.3 Controls 操作（stateless decoder 关键！）</h3>
+
+  <p>Controls 是 V4L2 中配置参数的标准方式。对 stateless decoder，所有解码参数（SPS/PPS/slice param/decode param）都是 controls。</p>
+
+  <div class="cmd-card">
+    <h3>列出所有 controls</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--list-ctrls</span>
+
+<span class="cmt"># 只看特定类型的 controls</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--list-ctrls-menu</span></code></pre>
+    <div class="desc">输出 controls 的 ID、类型、范围、当前值。stateless decoder 会有大量 <code>V4L2_CID_STATELESS_*</code> controls。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>设置 control 值</h3>
+    <pre><code><span class="cmt"># 设置整数 control</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--set-ctrl</span> <span class="val">brightness=128</span>
+
+<span class="cmt"># 设置 menu control</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--set-ctrl</span> \
+  <span class="val">video_bitrate_mode=0</span></code></pre>
+    <div class="desc">简单 controls 可命令行设置。复杂 structure controls（如 H.264 SPS）需要用代码或脚本。</div>
+  </div>
+
+  <h3>1.4 Buffer 与 Streaming 操作</h3>
+
+  <div class="cmd-card">
+    <h3>测试 streaming（MMAP 模式）</h3>
+    <pre><code><span class="cmt"># CAPTURE: 抓 10 帧，保存到文件</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--stream-mmap</span> <span class="opt">--stream-count</span><span class="val">=10</span> \
+  <span class="opt">--stream-to</span><span class="val">=capture.raw</span>
+
+<span class="cmt"># OUTPUT: 从文件读入数据流送给 OUTPUT queue</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--out-mmap</span> <span class="opt">--stream-count</span><span class="val">=10</span> \
+  <span class="opt">--stream-from</span><span class="val">=input.h264</span>
+
+<span class="cmt"># 同时 OUTPUT → CAPTURE (mem2mem)</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--out-mmap</span> \
+  <span class="opt">--stream-from</span><span class="val">=input.h264</span> \
+  <span class="opt">--stream-mmap</span> <span class="opt">--stream-to</span><span class="val">=decoded.yuv</span></code></pre>
+    <div class="desc">相当于完整走一遍 REQBUFS → QBUF → STREAMON → DQBUF → STREAMOFF 流程。</div>
+  </div>
+
+  <h3>1.5 事件订阅（stateful decoder DRC/drain）</h3>
+
+  <div class="cmd-card">
+    <h3>订阅 SOURCE_CHANGE 事件</h3>
+    <pre><code><span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--subscribe-event</span> <span class="val">source_change</span>
+
+<span class="cmt"># 等待事件（阻塞）</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--wait-event</span> <span class="val">source_change</span></code></pre>
+    <div class="desc">对应 stateful decoder 中 V4L2_EVENT_SOURCE_CHANGE 的订阅/等待。DRC 检测不可或缺。</div>
+  </div>
+
+  <h3>1.6 Decoder 专用命令</h3>
+
+  <div class="cmd-card">
+    <h3>发送 STOP/START 命令（stateful drain/seek）</h3>
+    <pre><code><span class="cmt"># 触发 drain</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--decoder-cmd</span> <span class="val">stop</span>
+
+<span class="cmt"># 恢复解码</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--decoder-cmd</span> <span class="val">start</span>
+
+<span class="cmt"># flush（stateless decoder 释放 held buffer）</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video0 <span class="opt">--decoder-cmd</span> <span class="val">flush</span></code></pre>
+    <div class="desc">发送 <code>VIDIOC_DECODER_CMD</code>，对应 stateful 的 drain/seek 和 stateless 的 flush。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>尝试解码一帧（需要真实硬件或 vicodec）</h3>
+    <pre><code><span class="cmt"># 用 GStreamer + v4l2sl 插件（stateless）</span>
+gst-launch-1.0 filesrc location=test.h264 ! h264parse ! \
+  v4l2slh264dec ! videoconvert ! autovideosink
+
+<span class="cmt"># 或用 stateful decoder</span>
+gst-launch-1.0 filesrc location=test.h264 ! h264parse ! \
+  v4l2h264dec ! videoconvert ! autovideosink</code></pre>
+    <div class="desc"><code>v4l2slh264dec</code> 是 stateless 插件，<code>v4l2h264dec</code> 是 stateful 插件。</div>
+  </div>
+</section>
+
+<section>
+  <h2>2. v4l2-compliance：驱动一致性测试</h2>
+
+  <p><code>v4l2-compliance</code> 是 V4L2 驱动的自动化测试套件。它对驱动执行所有标准 ioctl 并验证返回值、边界条件、状态机正确性。这是排查驱动 bug 的第一站。</p>
+
+  <div class="cmd-card">
+    <h3>基本兼容性测试</h3>
+    <pre><code><span class="cmd">v4l2-compliance</span> <span class="opt">-d</span> /dev/video0</code></pre>
+    <div class="desc">测试 open/close、querycap、枚举 formats、controls、selection API 等。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>含 streaming 的完整测试</h3>
+    <pre><code><span class="cmd">v4l2-compliance</span> <span class="opt">-d</span> /dev/video0 <span class="opt">-s</span></code></pre>
+    <div class="desc">在 <code>-s</code> 模式下会实际分配 buffer、启动 streaming、读写数据，验证 QBUF/DQBUF/STREAMON/STREAMOFF 的完整流程。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>mem2mem 设备测试</h3>
+    <pre><code><span class="cmd">v4l2-compliance</span> <span class="opt">-d</span> /dev/video0 <span class="opt">-m2m</span></code></pre>
+    <div class="desc">让工具理解这是一对 OUTPUT+CAPTURE 队列，执行 decoder 特有的测试。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>针对 vivid 的完整测试（关闭错误注入）</h3>
+    <pre><code><span class="cmt"># vivid 需要关闭错误注入，否则 disconnect 会导致后续全部失败</span>
+sudo modprobe vivid no_error_inj=1
+<span class="cmd">v4l2-compliance</span> <span class="opt">-d</span> /dev/video0 <span class="opt">-s</span></code></pre>
+  </div>
+
+  <h3>解读输出</h3>
+  <p>典型输出结构：</p>
+  <pre><code>Compliance test for vivid device /dev/video0:
+
+Driver Info:
+        Driver name      : vivid
+        Card type        : vivid
+        ...
+
+<span style="color:#98c379;">Total for vivid device /dev/video0: 47, Succeeded: 47, Failed: 0, Warnings: 0</span></code></pre>
+
+  <p>遇到 FAIL 时看具体测试名，结合内核文档中的对应 ioctl 章节排查。</p>
+</section>
+
+<section>
+  <h2>3. 虚拟驱动：vivid 与 vicodec</h2>
+
+  <h3>3.1 vivid：通用视频设备模拟器</h3>
+
+  <p>vivid 模拟 视频采集/输出/radio/VBI 等设备。虽然它<strong>不是</strong> decoder，但对练习基本的 V4L2 操作（格式设置、buffer 管理、streaming）非常有价值。</p>
+
+  <div class="cmd-card">
+    <h3>加载 vivid</h3>
+    <pre><code><span class="cmt"># 加载 vivid（创建 capture + output 两个 video 节点）</span>
+sudo modprobe vivid
+
+<span class="cmt"># 查看创建了哪些节点</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">--list-devices</span>
+
+<span class="cmt"># vivid 常见输出:</span>
+<span class="cmt"># vivid (platform:vivid-000):</span>
+<span class="cmt">#         /dev/video0   ← video capture</span>
+<span class="cmt">#         /dev/video1   ← video output</span>
+<span class="cmt">#         /dev/vbi0     ← vbi capture</span>
+<span class="cmt">#         /dev/vbi1     ← vbi output</span>
+<span class="cmt">#         /dev/radio0   ← radio rx</span>
+<span class="cmt">#         /dev/radio1   ← radio tx</span>
+<span class="cmt">#         /dev/swradio0 ← SDR</span></code></pre>
+  </div>
+
+  <div class="cmd-card">
+    <h3>设置多平面模式</h3>
+    <pre><code><span class="cmd">sudo modprobe</span> <span class="val">vivid</span> <span class="val">multiplanar=2</span></code></pre>
+    <div class="desc"><code>multiplanar=2</code> 让设备使用 MPLANE API，这是 decoder 的常用模式。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>启用 Request API（模拟 stateless 设备行为）</h3>
+    <pre><code><span class="cmd">sudo modprobe</span> <span class="val">vivid</span> <span class="val">supports_requests=2</span></code></pre>
+    <div class="desc"><code>supports_requests=2</code> 表示 requires requests，强制使用 Request API。</div>
+  </div>
+
+  <h3>3.2 vicodec：Stateless 虚拟解码器</h3>
+
+  <p>vicodec 是内核自带的虚拟 stateless codec 驱动 (FWHT codec)，能模拟完整的 stateless decoder 行为：</p>
+
+  <div class="cmd-card">
+    <h3>加载 vicodec</h3>
+    <pre><code><span class="cmd">sudo modprobe</span> <span class="val">vicodec</span>
+
+<span class="cmt"># 查看设备:</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">--list-devices</span>
+<span class="cmt"># vicodec (platform:vicodec):</span>
+<span class="cmt">#         /dev/video2   ← mem2mem stateless decoder</span>
+
+<span class="cmt"># 查看它的 coded format:</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video2 <span class="opt">--list-formats-out</span>
+<span class="cmt"># ioctl: VIDIOC_ENUM_FMT</span>
+<span class="cmt">#         Type: Video Output</span>
+<span class="cmt">#         [0]: 'FWHT' (FWHT, compressed)</span></code></pre>
+    <div class="desc">vicodec 使用 FWHT (Fast Walsh-Hadamard Transform) 作为编码格式——不是真实的 H.264/HEVC，但完整的 stateless API 都在。</div>
+  </div>
+
+  <div class="cmd-card">
+    <h3>用 v4l2-compliance 测试 vicodec</h3>
+    <pre><code><span class="cmd">v4l2-compliance</span> <span class="opt">-d</span> /dev/video2 <span class="opt">-m2m</span> <span class="opt">-s</span></code></pre>
+  </div>
+
+  <h3>3.3 visl：Stateless 解码器测试框架</h3>
+
+  <p>从 Linux 5.19+ 开始还有 <code>visl</code> (Virtual Stateless Decoder)，支持更多 codec 格式（H.264/H.265/VP8/VP9 等）：</p>
+
+  <pre><code><span class="cmd">sudo modprobe</span> <span class="val">visl</span>
+
+<span class="cmt"># visl 会暴露所有它支持的 coded format</span>
+<span class="cmd">v4l2-ctl</span> <span class="opt">-d</span> /dev/video3 <span class="opt">--list-formats-out</span></code></pre>
+
+  <div class="warn-box">
+    visl 是纯测试框架，不会真的解码出正确的像素数据——它只是验证 API 流程的正确性。
+  </div>
+</section>
+
+<section>
+  <h2>4. 实战工作流：排查一个 decoder 问题</h2>
+
+  <p>假设你接到一个 bug：某 stateful decoder 在分辨率从 1080p 切换到 720p 后，解码器卡住不再产出帧。</p>
+
+  <div class="workflow">
+    <div><strong>确认设备</strong><br><code>v4l2-ctl --list-devices</code> 找到目标 decoder 的 /dev/videoX。</div>
+
+    <div><strong>全面信息采集</strong><br><code>v4l2-ctl -d /dev/videoX --all</code> 看 driver info、coded format、controls。</div>
+
+    <div><strong>跑合规测试</strong><br><code>v4l2-compliance -d /dev/videoX -m2m -s</code> 排除基本 API 使用错误。</div>
+
+    <div><strong>检查事件</strong><br>如果 stateful：用 <code>--subscribe-event source_change</code> 订阅，看驱动是否发出事件。</div>
+
+    <div><strong>最小复现</strong><br>写一个最小用户程序或用 <code>v4l2-ctl --stream-mmap</code> 走一遍 DRC 模拟流程。</div>
+
+    <div><strong>看内核日志</strong><br><code>dmesg | grep -i v4l2</code> / <code>dmesg | grep -i vicodec</code> 查驱动打印。</div>
+  </div>
+</section>
+
+<section>
+  <h2>5. 速查：v4l2-ctl 常用参数一览</h2>
+
+  <table>
+    <tr><th>场景</th><th>命令</th></tr>
+    <tr><td>列出设备</td><td><code>v4l2-ctl --list-devices</code></td></tr>
+    <tr><td>全部信息</td><td><code>v4l2-ctl -d /dev/video0 --all</code></td></tr>
+    <tr><td>设备能力</td><td><code>v4l2-ctl -d /dev/video0 --info</code></td></tr>
+    <tr><td>枚举 CAPTURE 格式</td><td><code>v4l2-ctl -d /dev/video0 --list-formats</code></td></tr>
+    <tr><td>枚举 OUTPUT 格式</td><td><code>v4l2-ctl -d /dev/video0 --list-formats-out</code></td></tr>
+    <tr><td>获取 CAPTURE 格式</td><td><code>v4l2-ctl -d /dev/video0 --get-fmt-video</code></td></tr>
+    <tr><td>获取 OUTPUT 格式</td><td><code>v4l2-ctl -d /dev/video0 --get-fmt-video-out</code></td></tr>
+    <tr><td>列出 controls</td><td><code>v4l2-ctl -d /dev/video0 --list-ctrls</code></td></tr>
+    <tr><td>设置 control</td><td><code>v4l2-ctl -d /dev/video0 --set-ctrl=NAME=VALUE</code></td></tr>
+    <tr><td>订阅事件</td><td><code>v4l2-ctl -d /dev/video0 --subscribe-event=NAME</code></td></tr>
+    <tr><td>等待事件</td><td><code>v4l2-ctl -d /dev/video0 --wait-event=NAME</code></td></tr>
+    <tr><td>抓帧（MMAP）</td><td><code>v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=10 --stream-to=out.raw</code></td></tr>
+    <tr><td>送帧（MMAP）</td><td><code>v4l2-ctl -d /dev/video0 --out-mmap --stream-from=in.raw</code></td></tr>
+    <tr><td>decoder 命令</td><td><code>v4l2-ctl -d /dev/video0 --decoder-cmd stop|start|flush</code></td></tr>
+    <tr><td>合规测试</td><td><code>v4l2-compliance -d /dev/video0 [-s] [-m2m]</code></td></tr>
+  </table>
+</section>
+
+<hr>
+
+<section>
+  <h2>6. 小测验</h2>
+
+  <div class="quiz" id="quiz1">
+    <p class="quiz-q">1. 用 v4l2-ctl 设置 OUTPUT queue 的格式，正确的选项是？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">--set-fmt-video width=1920,height=1080</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz1')">--set-fmt-video-out width=1920,height=1080,pixelformat=H264</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">--set-fmt-video-capture width=1920,height=1080</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">--set-fmt-video-m2m width=1920,height=1080</div>
+    <div class="feedback" id="fb1"></div>
+  </div>
+
+  <div class="quiz" id="quiz2">
+    <p class="quiz-q">2. v4l2-compliance 的 -s 选项代表什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">只做静态测试，不触碰 streaming</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">跳过所有 controls 相关测试</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz2')">包含 streaming 测试（实际分配 buffer 并读写）</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">以静默模式运行，不打印输出</div>
+    <div class="feedback" id="fb2"></div>
+  </div>
+
+  <div class="quiz" id="quiz3">
+    <p class="quiz-q">3. vivid 和 vicodec 的区别是什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">vivid 做解码，vicodec 做采集</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">两个完全相同，只是名字不同</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz3')">vivid 模拟采集/输出设备，vicodec 模拟 stateless decoder</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">vivid 是 stateful，vicodec 是 encoder</div>
+    <div class="feedback" id="fb3"></div>
+  </div>
+
+  <div class="quiz" id="quiz4">
+    <p class="quiz-q">4. 要触发 stateful decoder 的 drain，v4l2-ctl 用什么命令？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">--stream-mmap --stream-count=0</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">--set-ctrl drain=1</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz4')">--decoder-cmd stop</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">--subscribe-event eos</div>
+    <div class="feedback" id="fb4"></div>
+  </div>
+
+  <div class="quiz" id="quiz5">
+    <p class="quiz-q">5. 排查 DRC 卡死问题时，优先检查什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">重新编译内核</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz5')">订阅 source_change 事件，确认驱动是否发出</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">用 v4l2-compliance 测试其他无关设备</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">直接重启设备</div>
+    <div class="feedback" id="fb5"></div>
+  </div>
+</section>
+
+<hr>
+
+<section class="next-steps">
+  <h3>📚 回顾与下一步</h3>
+  <ul>
+    <li>装上 v4l-utils 后亲手跑一遍 <code>v4l2-ctl --all</code> 看看输出</li>
+    <li>如果有 Linux 机器：加载 vivid/vicodec，用 v4l2-compliance -s 测试一遍</li>
+    <li>阅读 <a href="https://github.com/GStreamer/gst-plugins-good/tree/master/sys/v4l2">GStreamer v4l2 plugin 源码</a> 看它们如何用 v4l2-ctl 做底层操作</li>
+    <li>阅读：<a href="https://www.kernel.org/doc/html/latest/admin-guide/media/vivid.html">vivid 官方文档</a></li>
+    <li>下一步：可以深入一个真实驱动源码（hantro / cedrus），对比理论学到的状态机在实际代码中如何体现</li>
+  </ul>
+
+  <h3 style="margin-top: 1rem;">💬 有问题？</h3>
+  <p>工具有任何参数不理解的、输出看不懂的，随时问我。如果你在真实硬件上运行 v4l2-compliance 遇到 FAIL，把输出贴过来一起分析。</p>
+</section>
+
+<footer>
+  Lesson 4 of the V4L2 Learning Track —
+  <a href="https://github.com/linuxtv/v4l-utils">Primary Source: v4l-utils (GitHub)</a>
+  &nbsp;|&nbsp;
+  <a href="https://www.kernel.org/doc/html/latest/admin-guide/media/vivid.html">vivid kernel doc</a>
+</footer>
+
+</div>
+
+<script>
+function checkAnswer(el, quizId) {
+  var quiz = document.getElementById(quizId);
+  var options = quiz.querySelectorAll('.option');
+  var feedback = quiz.querySelector('.feedback');
+  var isCorrect = el.getAttribute('data-answer') === 'correct';
+
+  options.forEach(function(opt) {
+    opt.onclick = null;
+    opt.style.cursor = 'default';
+    if (opt === el) {
+      opt.classList.add(isCorrect ? 'correct' : 'wrong');
+      opt.classList.add('selected');
+    } else if (opt.getAttribute('data-answer') === 'correct') {
+      opt.classList.add('correct');
+    }
+  });
+
+  feedback.classList.add('show');
+  feedback.classList.add(isCorrect ? 'correct' : 'wrong');
+  feedback.textContent = isCorrect
+    ? '✓ 正确！'
+    : '✗ 再想想。回顾一下对应章节的内容。';
+}
+</script>
+
+</body>
+</html>

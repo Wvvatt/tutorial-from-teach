@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 3: Stateless Decoder 与 Request API</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --text: #222;
+    --bg: #faf9f7;
+    --accent: #1a5276;
+    --accent-light: #2980b9;
+    --code-bg: #f0ede8;
+    --border: #ddd;
+    --success: #27ae60;
+    --error: #c0392b;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', 'Fira Code', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+    font-weight: 350;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 1.5rem;
+  }
+
+  header .lesson-num {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  header .subtitle {
+    font-size: 0.95rem;
+    color: #555;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 2rem 0 0.75rem 0;
+    padding-top: 1rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--accent-light);
+    margin: 1.5rem 0 0.5rem 0;
+  }
+
+  p {
+    margin-bottom: 1rem;
+  }
+
+  a {
+    color: var(--accent-light);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  a:hover { border-bottom-color: var(--accent-light); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    background: var(--code-bg);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.5;
+  }
+
+  pre code { background: none; padding: 0; border-radius: 0; }
+
+  blockquote {
+    border-left: 3px solid var(--accent-light);
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    background: rgba(41, 128, 185, 0.06);
+    border-radius: 0 4px 4px 0;
+  }
+
+  blockquote p { margin-bottom: 0; }
+
+  .info-box {
+    background: #eaf2f8;
+    border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .info-box strong { color: var(--accent); }
+
+  .warn-box {
+    background: #fef9e7;
+    border-left: 3px solid #f39c12;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92rem;
+  }
+
+  .step-list {
+    list-style: none;
+    counter-reset: step-counter;
+    margin: 1rem 0;
+  }
+
+  .step-list li {
+    counter-increment: step-counter;
+    padding: 0.6rem 0 0.6rem 2.5rem;
+    position: relative;
+    border-bottom: 1px solid #f0ede8;
+  }
+
+  .step-list li::before {
+    content: counter(step-counter);
+    position: absolute;
+    left: 0;
+    top: 0.6rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+  }
+
+  .step-list li strong { color: var(--accent); }
+  .step-list li code { font-size: 0.82em; }
+
+  .quiz {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .quiz p.quiz-q {
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .quiz .option {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    font-size: 0.92rem;
+  }
+
+  .quiz .option:hover { background: #f5f3ef; }
+  .quiz .option.selected { border-color: var(--accent-light); background: #eaf2f8; }
+  .quiz .option.correct { border-color: var(--success); background: #eafaf1; }
+  .quiz .option.wrong { border-color: var(--error); background: #fdedec; }
+
+  .quiz .feedback {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    display: none;
+  }
+
+  .quiz .feedback.show { display: block; }
+  .quiz .feedback.correct { background: #eafaf1; color: #1e8449; }
+  .quiz .feedback.wrong { background: #fdedec; color: #922b21; }
+
+  .key-point {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 1rem 0;
+  }
+
+  .key-point .icon { font-size: 1.2rem; line-height: 1.4; }
+
+  .comparison {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 0.9rem;
+  }
+
+  .comparison th {
+    background: var(--accent);
+    color: #fff;
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    font-weight: 500;
+  }
+
+  .comparison td {
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .comparison tr:nth-child(even) td {
+    background: #fafaf8;
+  }
+
+  .comparison td:first-child {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+
+  table th {
+    background: var(--code-bg);
+    padding: 0.5rem 0.7rem;
+    text-align: left;
+    font-weight: 500;
+    border-bottom: 2px solid var(--accent);
+  }
+
+  table td {
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table tr:nth-child(even) td { background: #fdfdfb; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0 1.5rem 0;
+  }
+
+  .next-steps ul {
+    margin: 0.5rem 0 1rem 1.5rem;
+  }
+
+  .next-steps li { margin-bottom: 0.35rem; }
+
+  footer {
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    color: #888;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<header>
+  <div class="lesson-num">Lesson 3</div>
+  <h1>Stateless Decoder 与 Request API</h1>
+  <div class="subtitle">理解每帧独立提交模型，以及 Request API 如何将 buffer 和 controls 原子绑定</div>
+</header>
+
+<nav style="margin: 0 0 2rem 0; font-size: 0.85rem; color: #888;">
+  ← <a href="0002-Stateful-Decoder-State-Machine.html">Lesson 2: Stateful Decoder 状态机</a>
+  &nbsp;|&nbsp;
+  → <a href="0004-V4L2-Tools-Practice.html">Lesson 4: V4L2 调试工具实战</a>
+</nav>
+
+<section>
+  <h2>0. 快速回顾：Stateful 模型做了什么</h2>
+
+  <p>在 Lesson 2 中，我们看到 stateful decoder 的驱动维护了所有解码状态：</p>
+
+  <table>
+    <tr><th>驱动负责</th><th>用户负责</th></tr>
+    <tr><td>维护 DPB、参考帧列表、解码顺序</td><td>送入完整码流</td></tr>
+    <tr><td>自动查找 resume point</td><td>按 display order 取出帧</td></tr>
+    <tr><td>管理 buffer 生命周期（哪些是参考帧）</td><td>不写入已 dequeue 的 buffer</td></tr>
+    <tr><td>处理 SPS/PPS 解析</td><td>发送 <code>DEC_CMD_STOP</code> 来 drain</td></tr>
+  </table>
+
+  <p><strong>Stateless decoder 正好相反</strong>：驱动不做上述任何事，所有状态维护都在用户空间。</p>
+
+  <div class="info-box">
+    <strong>核心哲学：</strong>驱动是一个"纯变换函数"——给一组 buffer + 一组 controls，产出解码帧。驱动不在帧之间保留任何状态。
+  </div>
+</section>
+
+<section>
+  <h2>1. 什么是 Stateless Decoder</h2>
+
+  <p>Stateless decoder 工作方式的核心类比：</p>
+
+  <blockquote>
+    <p><strong>Stateful</strong> ≈ 你把整本书交给翻译，他按章节顺序交出译文。<br>
+    <strong>Stateless</strong> ≈ 你把每一页单独交给翻译，同时告诉他"这一页是第 3 章第 2 节，参考了第 5 页和第 8 页的数据"。翻译自己什么都不记。</p>
+  </blockquote>
+
+  <p>在 V4L2 的语境下，这意味着：</p>
+
+  <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+    <li>用户必须自己解析码流中的 <strong>SPS/PPS</strong>（H.264）或 <strong>frame header</strong>（VP8/VP9）</li>
+    <li>用户必须自己管理 <strong>DPB</strong>：跟踪哪些 buffer 是参考帧，哪些 buffer 被哪些帧引用</li>
+    <li>用户必须为每帧提供完整的解码参数，通过 <strong>V4L2 controls</strong> 传递</li>
+    <li>解码参数和输入数据必须 <strong>原子提交</strong>，这正是 Request API 的用途</li>
+  </ul>
+</section>
+
+<section>
+  <h2>2. Request API 基础</h2>
+
+  <p>Request API 的核心思想：将一组 V4L2 操作打包成一个原子单元，一起提交给驱动。</p>
+
+  <h3>Request 的生命周期</h3>
+
+  <div style="font-family: var(--mono); font-size: 0.8rem; text-align: center; margin: 1.5rem 0; line-height: 2; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
+    <span style="display: inline-block; border: 2px solid var(--accent); border-radius: 6px; padding: 0.3rem 0.7rem; margin: 0.2rem; font-weight: 500; background: #eaf2f8; color: var(--accent);">ALLOC</span>
+    <span style="display: inline-block; color: #888; margin: 0 0.4rem; font-size: 1.2rem;">→</span>
+    <span style="display: inline-block; border: 2px solid var(--accent); border-radius: 6px; padding: 0.3rem 0.7rem; margin: 0.2rem; font-weight: 500; background: #f0ede8; color: var(--accent);">PREPARE<br><span style="font-size: 0.65rem;">QBUF + S_EXT_CTRLS</span></span>
+    <span style="display: inline-block; color: #888; margin: 0 0.4rem; font-size: 1.2rem;">→</span>
+    <span style="display: inline-block; border: 2px solid var(--accent); border-radius: 6px; padding: 0.3rem 0.7rem; margin: 0.2rem; font-weight: 500; background: #eaf2f8; color: var(--accent);">QUEUE<br><span style="font-size: 0.65rem;">提交给驱动</span></span>
+    <span style="display: inline-block; color: #888; margin: 0 0.4rem; font-size: 1.2rem;">→</span>
+    <span style="display: inline-block; border: 2px solid var(--accent); border-radius: 6px; padding: 0.3rem 0.7rem; margin: 0.2rem; font-weight: 500; background: #eaf2f8; color: var(--accent);">COMPLETE<br><span style="font-size: 0.65rem;">poll() 等待</span></span>
+    <span style="display: inline-block; color: #888; margin: 0 0.4rem; font-size: 1.2rem;">→</span>
+    <span style="display: inline-block; border: 2px solid #888; border-radius: 6px; padding: 0.3rem 0.7rem; margin: 0.2rem; font-weight: 500; background: #faf9f7; color: #555; border-style: dashed; font-size: 0.82rem;">REINIT / close</span>
+  </div>
+
+  <h3>关键系统调用</h3>
+
+  <table>
+    <tr><th>操作</th><th>系统调用</th><th>说明</th></tr>
+    <tr>
+      <td>分配 Request</td>
+      <td><code>ioctl(media_fd, MEDIA_IOC_REQUEST_ALLOC, &req_fd)</code></td>
+      <td>从 media 设备分配一个 request，返回 FD</td>
+    </tr>
+    <tr>
+      <td>绑定 buffer 到 Request</td>
+      <td><code>QBUF</code> 时设置 <code>buf.flags |= V4L2_BUF_FLAG_REQUEST_FD</code><br>并设置 <code>buf.request_fd = req_fd</code></td>
+      <td>告诉驱动：这个 buffer 属于指定 request</td>
+    </tr>
+    <tr>
+      <td>绑定 controls 到 Request</td>
+      <td><code>S_EXT_CTRLS</code> 时设置 <code>which = V4L2_CTRL_WHICH_REQUEST_VAL</code><br>并设置 <code>request_fd = req_fd</code></td>
+      <td>控件的值在 request 提交时才生效</td>
+    </tr>
+    <tr>
+      <td>提交 Request</td>
+      <td><code>ioctl(req_fd, MEDIA_REQUEST_IOC_QUEUE)</code></td>
+      <td>原子提交：buffer 开始被处理，controls 一次性应用</td>
+    </tr>
+    <tr>
+      <td>等待完成</td>
+      <td><code>poll(&(struct pollfd){.fd=req_fd, .events=POLLPRI}, 1, -1)</code></td>
+      <td>阻塞等待 request 完成</td>
+    </tr>
+    <tr>
+      <td>回收 Request</td>
+      <td><code>ioctl(req_fd, MEDIA_REQUEST_IOC_REINIT)</code></td>
+      <td>清空状态，复用该 request</td>
+    </tr>
+  </table>
+</section>
+
+<section>
+  <h2>3. Stateless Decoder 的完整流程</h2>
+
+  <h3>3.1 初始化</h3>
+
+  <ol class="step-list">
+    <li><strong>S_FMT(OUTPUT)</strong> — 设置 coded format（如 <code>V4L2_PIX_FMT_H264_SLICE</code>）及其宽高</li>
+    <li><strong>S_EXT_CTRLS</strong> — 设置 codec 级别的初始参数（如 H.264 profile/level，或初始的 SPS/PPS）</li>
+    <li><strong>G_FMT(CAPTURE)</strong> — 获取驱动推荐的 CAPTURE 格式</li>
+    <li><strong>[可选] S_FMT(CAPTURE)</strong> — 选择不同的 raw format</li>
+    <li><strong>REQBUFS(OUTPUT)</strong> — 分配源 buffer（bytestream 数据存放于此）</li>
+    <li><strong>REQBUFS(CAPTURE)</strong> — 分配目标 buffer（解码帧）<br>
+      <em style="font-size: 0.85rem; color: #888;">注意：USERPTR 不兼容 CAPTURE queue</em></li>
+    <li><strong>MEDIA_IOC_REQUEST_ALLOC</strong> — 为每个 OUTPUT buffer 分配一个 request</li>
+    <li><strong>STREAMON(OUTPUT)</strong> + <strong>STREAMON(CAPTURE)</strong></li>
+  </ol>
+
+  <div class="info-box">
+    <strong>对比 Stateful：</strong>stateless 没有 INIT → CAPTURE_SETUP → DECODING 的状态变换。初始化完成后直接进入解码循环，状态全由用户管理。没有 <code>V4L2_EVENT_SOURCE_CHANGE</code>，没有自动等待 resolve。
+  </div>
+
+  <h3>3.2 每帧解码的循环</h3>
+
+  <p>这是 stateless decoder 最关键的操作——<strong>每帧独立提交</strong>：</p>
+
+  <pre><code>// 对于每一帧：
+// 1. 准备 OUTPUT buffer（bytestream 数据）
+struct v4l2_buffer out_buf = {
+    .type       = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+    .index      = out_idx,
+    .bytesused  = frame_data_size,
+    .flags      = V4L2_BUF_FLAG_REQUEST_FD,
+    .request_fd = req_fd,
+    .timestamp  = { .tv_sec = frame_num, .tv_usec = 0 },
+};
+ioctl(decoder_fd, VIDIOC_QBUF, &out_buf);
+
+// 2. 设置解码参数（H.264 示例）
+struct v4l2_ext_controls ctrls = {
+    .which      = V4L2_CTRL_WHICH_REQUEST_VAL,
+    .request_fd = req_fd,
+    .count      = /* 多少个 controls */,
+    .controls   = /* struct v4l2_ext_control 数组 */,
+};
+// controls 数组包含：
+//   - V4L2_CID_STATELESS_H264_SPS
+//   - V4L2_CID_STATELESS_H264_PPS
+//   - V4L2_CID_STATELESS_H264_SLICE_PARAMS
+//   - V4L2_CID_STATELESS_H264_DECODE_PARAMS (=DPB 引用信息)
+//   - V4L2_CID_STATELESS_H264_SCALING_MATRIX (可选)
+ioctl(decoder_fd, VIDIOC_S_EXT_CTRLS, &ctrls);
+
+// 3. 提交 request（原子起效）
+ioctl(req_fd, MEDIA_REQUEST_IOC_QUEUE);
+
+// 4. 等待 CAPTURE 产出
+ioctl(decoder_fd, VIDIOC_DQBUF, &capture_buf);
+// capture_buf.timestamp == frame_num（从 OUTPUT 传播而来）</code></pre>
+
+  <div class="key-point">
+    <div class="icon">📌</div>
+    <div>
+      <strong>QBUF 和 S_EXT_CTRLS 的顺序可以互换。</strong>控件在 request 提交时的最终状态才生效。可以分多次 <code>S_EXT_CTRLS</code> 调用，也可以覆盖之前设置的值。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4. HOLD_CAPTURE_BUF：多 Slice 帧的处理</h2>
+
+  <p>H.264 等格式支持一帧被分割成多个 slice。每个 slice 可以作为一个独立的 OUTPUT buffer 提交，但它们属于同一帧。</p>
+
+  <p>此时需要 <code>V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF</code> 标志：</p>
+
+  <pre><code>// Slice 1（非最后一个 slice）
+out_buf.flags |= V4L2_BUF_FLAG_REQUEST_FD
+              |  V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
+out_buf.timestamp = 42;  // 帧的 unique ID
+
+// Slice 2（也是非最后一个）
+out_buf.flags |= V4L2_BUF_FLAG_REQUEST_FD
+              |  V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
+out_buf.timestamp = 42;  // 同一个 timestamp！
+
+// Slice 3（最后一个 slice——不设 HOLD）
+out_buf.flags |= V4L2_BUF_FLAG_REQUEST_FD;
+// 不设 HOLD_CAPTURE_BUF！
+out_buf.timestamp = 42;  // 同一个 timestamp</code></pre>
+
+  <div class="info-box">
+    <strong>规则：</strong>相同 timestamp 的多个 OUTPUT buffer 会解码到同一个 CAPTURE buffer。<br>
+    HOLD_CAPTURE_BUF 告诉驱动："这个 CAPTURE buffer 还没完成，先别让它出队"。当最后一个 slice 的 OUTPUT buffer 不带 HOLD 且 timestamp 发生变化时，CAPTURE buffer 才会被完成并可供 DQBUF。
+  </div>
+
+  <div class="warn-box">
+    <strong>不是所有硬件都支持多 slice！</strong>只有 <code>ENUM_FMT</code> 时返回 <code>V4L2_BUF_CAP_SUPPORTS_M2M_HOLD_CAPTURE_BUF</code> 的驱动才支持。如果不支持，你需要自己在用户空间把同一帧的所有 slice 拼成一个 buffer 再提交。
+  </div>
+</section>
+
+<section>
+  <h2>5. Buffer 管理：用户空间的 DPB</h2>
+
+  <p>Stateless decoder 最大的复杂度来自 <strong>用户空间必须管理 DPB</strong>（Decoded Picture Buffer）。</p>
+
+  <h3>核心规则</h3>
+
+  <ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+    <li>CAPTURE buffer 出队后，用户可以使用它（显示/合成），但 <strong>如果它是参考帧，不能马上重新入队</strong></li>
+    <li>只有当引用该 buffer 的所有帧都解码完毕后，才能把它重新放回 CAPTURE queue</li>
+    <li>通过 <code>timestamp</code> 来引用参考帧：将 OUTPUT buffer 的 timestamp 转换为纳秒，填入 decode params 的参考帧列表</li>
+  </ol>
+
+  <pre><code>// 引用参考帧的典型做法
+struct v4l2_ctrl_h264_decode_params dp = { /* ... */ };
+
+// 参考帧列表中的每个条目引用一个之前解码帧的 timestamp（转纳秒）
+dp.dpb[0] = v4l2_timeval_to_ns(&ref_frame_0_timestamp);
+dp.dpb[1] = v4l2_timeval_to_ns(&ref_frame_1_timestamp);
+
+// 设置 decode params control
+struct v4l2_ext_control ctrl = {
+    .id    = V4L2_CID_STATELESS_H264_DECODE_PARAMS,
+    .ptr   = &dp,
+    .size  = sizeof(dp),
+};</code></pre>
+
+  <div class="key-point">
+    <div class="icon">🔑</div>
+    <div>
+      <strong>安全做法：</strong>在所有引用某参考帧的帧都 DQBUF 之前，不要把该参考帧 buffer 重新 QBUF 到 CAPTURE queue。<br><br>
+      <strong>进阶做法：</strong>如果驱动保证 CAPTURE buffer 按入队顺序处理（FIFO），且你已确保引用该参考帧的所有请求都已提交 + 数量足够的 CAPTURE buffer 已入队，则可以提前重新入队参考帧。
+    </div>
+  </div>
+
+  <h3>引用计数保护</h3>
+
+  <p>当你通过 Request 引用一个参考帧时，驱动会增加该帧对应资源（如 DMABUF）的引用计数。这意味着：即使你关闭了参考帧 DMABUF 的 FD，内核也不会释放它的内存，直到引用它的所有 request 都完成。</p>
+</section>
+
+<section>
+  <h2>6. Stateful vs Stateless — 完整对比</h2>
+
+  <table class="comparison">
+    <tr><th style="width:25%">维度</th><th style="width:37%">Stateful Decoder</th><th style="width:37%">Stateless Decoder</th></tr>
+    <tr>
+      <td>解码状态</td>
+      <td>驱动维护（DPB、参考帧列表、解码顺序）</td>
+      <td>用户空间维护全部状态</td>
+    </tr>
+    <tr>
+      <td>码流输入</td>
+      <td>原始 bytestream，驱动负责解析 SPS/PPS</td>
+      <td>用户需解析码流头，以 controls 形式传入</td>
+    </tr>
+    <tr>
+      <td>每帧操作</td>
+      <td>QBUF(OUTPUT) + DQBUF(CAPTURE)，无需额外参数</td>
+      <td>QBUF(OUTPUT) + S_EXT_CTRLS + QUEUE request</td>
+    </tr>
+    <tr>
+      <td>DPB 管理</td>
+      <td>驱动管理（用户只需不写入参考帧 buffer）</td>
+      <td>用户管理（追踪引用关系，安全回收 buffer）</td>
+    </tr>
+    <tr>
+      <td>每帧参数</td>
+      <td>驱动从码流中自动提取</td>
+      <td>用户通过 controls 显式提供所有参数</td>
+    </tr>
+    <tr>
+      <td>初始化</td>
+      <td>UNINIT → INIT → SOURCE_CHANGE → CAPTURE_SETUP → DECODING</td>
+      <td>直接初始化两队列 → 开始解码循环</td>
+    </tr>
+    <tr>
+      <td>DRC</td>
+      <td>驱动发出 <code>V4L2_EVENT_SOURCE_CHANGE</code><br>用户重新配置 CAPTURE</td>
+      <td>用户从码流中检测变化 <br>STREAMOFF 两队列，重新初始化</td>
+    </tr>
+    <tr>
+      <td>Drain</td>
+      <td><code>DEC_CMD_STOP</code> → 等待 <code>V4L2_BUF_FLAG_LAST</code></td>
+      <td><code>DEC_CMD_FLUSH</code>（如有 held buffer）<br>然后等待所有 request 完成</td>
+    </tr>
+    <tr>
+      <td>Seek</td>
+      <td>STREAMOFF/ON(OUTPUT)，驱动找 resume point</td>
+      <td>直接提交新位置的帧 + 对应的 controls</td>
+    </tr>
+    <tr>
+      <td>pause</td>
+      <td>不送数据即可</td>
+      <td>不送数据即可 (更简单)</td>
+    </tr>
+    <tr>
+      <td>驱动复杂度</td>
+      <td>高 — 需实现 DPB、参考帧管理、码流解析</td>
+      <td>低 — 纯"帧变换"，无状态逻辑</td>
+    </tr>
+    <tr>
+      <td>用户复杂度</td>
+      <td>低 — 只需管理 buffer 生命周期</td>
+      <td>高 — 需实现完整的 DPB 管理器和码流解析器</td>
+    </tr>
+    <tr>
+      <td>典型应用</td>
+      <td>嵌入式播放器、简单解码应用</td>
+      <td>Chromium（VA-API）、Android Codec v2、GStreamer stateless plugin</td>
+    </tr>
+  </table>
+</section>
+
+<section>
+  <h2>7. 何时选择 Stateless？</h2>
+
+  <p>Stateless 看起来"更难用"，但它存在的理由：</p>
+
+  <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+    <li><strong>硬件设计简单</strong>：解码器 ASIC 只需要实现纯解码运算，不需要内嵌码流解析器或 DPB 管理——这对 SoC 厂商来说是巨大优势</li>
+    <li><strong>用户空间有天然优势</strong>：码流解析和 DPB 管理在用户空间做更灵活（容易升级、跨平台共享代码）</li>
+    <li><strong>与图形栈集成</strong>：Chromium 等浏览器引擎已经有自己的码流解析器（用于软件解码），stateless 接口让它们直接复用</li>
+    <li><strong>原子提交模型</strong>：Request API 保证了 buffer 和 controls 同时提交，消除了竞态条件</li>
+    <li><strong>无 DRC 延迟</strong>：用户自己检测分辨率变化并重构，不需要等待驱动的事件通知</li>
+  </ul>
+
+  <div class="warn-box">
+    <strong>但也要注意：</strong>用户空间的码流解析器可能引入安全风险。如果解析器和硬件驱动对码流格式的理解不一致，可能导致越界访问或解码错误。内核文档明确说，驱动必须验证用户传入的所有参数。
+  </div>
+</section>
+
+<section>
+  <h2>8. 实操提示：如何判断一个 decoder 是 stateful 还是 stateless</h2>
+
+  <pre><code># 方法 1：检查 CAPTURE queue 是否支持 REQUEST
+v4l2-ctl -d /dev/video0 --list-formats-out
+
+# 方法 2：检查 CAPTURE queue 的 capabilities 中是否有 V4L2_BUF_CAP_SUPPORTS_REQUESTS
+v4l2-ctl -d /dev/video0 --get-fmt-video-out
+
+# 方法 3：看 coded format 的名字
+#   stateful coded format:   V4L2_PIX_FMT_H264     (不带 _SLICE)
+#   stateless coded format:  V4L2_PIX_FMT_H264_SLICE
+#   stateful coded format:   V4L2_PIX_FMT_VP8
+#   stateless coded format:  V4L2_PIX_FMT_VP8_FRAME
+
+# 方法 4：看设备 capability
+#   stateful: V4L2_CAP_VIDEO_M2M (普通 mem2mem)
+#   stateless: V4L2_CAP_VIDEO_M2M_MPLANE + BUF_CAP_SUPPORTS_REQUESTS</code></pre>
+</section>
+
+<hr>
+
+<section>
+  <h2>9. 小测验</h2>
+
+  <div class="quiz" id="quiz1">
+    <p class="quiz-q">1. Stateless decoder 中，谁负责管理 DPB（Decoded Picture Buffer）？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">驱动维护，用户通过 VIDIOC_G_DPB 查询</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz1')">用户空间维护，通过 controls 传递引用关系</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">硬件自动管理，无需任何软件参与</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz1')">内核中的 DPB helper 模块集中管理</div>
+    <div class="feedback" id="fb1"></div>
+  </div>
+
+  <div class="quiz" id="quiz2">
+    <p class="quiz-q">2. Request API 中，一个 request 提交时必须包含什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">至少一个 OUTPUT buffer 和一个 CAPTURE buffer</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz2')">至少一个 OUTPUT buffer（可能需要 controls）</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">仅 controls 即可，buffer 可以独立提交</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz2')">至少两个 OUTPUT buffer 以形成流水线</div>
+    <div class="feedback" id="fb2"></div>
+  </div>
+
+  <div class="quiz" id="quiz3">
+    <p class="quiz-q">3. 多个 slice 属于同一帧时，要使用什么机制？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">对每个 slice 单独分配一个 CAPTURE buffer</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz3')">相同 timestamp + HOLD_CAPTURE_BUF 标志</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">在用户空间先拼接所有 slice 再提交</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz3')">使用 V4L2_BUF_FLAG_SLICE 标志分隔</div>
+    <div class="feedback" id="fb3"></div>
+  </div>
+
+  <div class="quiz" id="quiz4">
+    <p class="quiz-q">4. Stateful 和 Stateless decoder 在 DRC 时最大的区别是什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">Stateful 不需要 DRC，stateless 需要</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz4')">Stateful 由驱动发事件通知，stateless 由用户自行检测并重建</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">Stateful 要重新分配 buffer，stateless 则不用</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz4')">两种 decoder 的 DRC 流程完全一样</div>
+    <div class="feedback" id="fb4"></div>
+  </div>
+
+  <div class="quiz" id="quiz5">
+    <p class="quiz-q">5. 以下哪个是 stateless decoder 的 coded format 命名特征？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">前缀带 RAW_（如 RAW_H264）</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">前缀带 STATELESS_（如 STATELESS_H264）</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this, 'quiz5')">后缀带 _SLICE 或 _FRAME（如 H264_SLICE）</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this, 'quiz5')">格式名字全部大写（如 H264 而非 h264）</div>
+    <div class="feedback" id="fb5"></div>
+  </div>
+</section>
+
+<hr>
+
+<section class="next-steps">
+  <h3>📚 回顾与下一步</h3>
+  <ul>
+    <li>复习术语：<a href="GLOSSARY.md">V4L2 Glossary</a> — 确保 <code>REQUEST</code>、<code>Stateless decoder</code>、<code>DPB</code> 已熟悉</li>
+    <li>阅读内核官方文档：
+      <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-stateless-decoder.html">Memory-to-Memory Stateless Video Decoder Interface</a>
+      和
+      <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/mediactl/request-api.html">Request API</a>
+    </li>
+    <li>参考实现：查看 GStreamer 的 <code>v4l2codecs</code> 插件系列源码，这是 stateless decoder 的最佳用户空间实现典范</li>
+    <li>下一课建议：<strong>V4L2 调试工具实战</strong> — 用 vivid 虚拟驱动 + v4l2-ctl 来对比操作 stateful 和 stateless 设备</li>
+  </ul>
+
+  <h3 style="margin-top: 1rem;">💬 有问题？</h3>
+  <p>Stateless decoder + Request API 是 V4L2 中最复杂的概念之一。DPB 管理、controls 参数填充、HOLD_CAPTURE_BUF 的使用时机——这些在实际编码时会有很多细节。有任何不清楚的地方随时问我。如果遇到驱动行为不符合文档预期的情况，推荐去 <a href="https://linuxtv.org/lists.php">linux-media 邮件列表</a> 报告。</p>
+</section>
+
+<footer>
+  Lesson 3 of the V4L2 Learning Track —
+  <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-stateless-decoder.html">Primary Source: Stateless Decoder Interface (kernel.org)</a>
+</footer>
+
+</div>
+
+<script>
+function checkAnswer(el, quizId) {
+  var quiz = document.getElementById(quizId);
+  var options = quiz.querySelectorAll('.option');
+  var feedback = quiz.querySelector('.feedback');
+  var isCorrect = el.getAttribute('data-answer') === 'correct';
+
+  options.forEach(function(opt) {
+    opt.onclick = null;
+    opt.style.cursor = 'default';
+    if (opt === el) {
+      opt.classList.add(isCorrect ? 'correct' : 'wrong');
+      opt.classList.add('selected');
+    } else if (opt.getAttribute('data-answer') === 'correct') {
+      opt.classList.add('correct');
+    }
+  });
+
+  feedback.classList.add('show');
+  feedback.classList.add(isCorrect ? 'correct' : 'wrong');
+  feedback.textContent = isCorrect
+    ? '✓ 正确！'
+    : '✗ 再想想。回顾一下对应章节的内容。';
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V4L2 工具速查表</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  @page { size: A4; margin: 12mm; }
+
+  :root {
+    --text: #222;
+    --bg: #fff;
+    --accent: #1a5276;
+    --code-bg: #f5f3ef;
+    --border: #ddd;
+    --sans: 'IBM Plex Sans', -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    font-size: 10pt;
+    line-height: 1.5;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+
+  h1 { font-size: 16pt; font-weight: 600; color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 0.3rem; margin-bottom: 0.8rem; }
+  h2 { font-size: 12pt; font-weight: 500; color: var(--accent); margin: 1rem 0 0.4rem 0; }
+  h3 { font-size: 10.5pt; font-weight: 500; color: var(--accent); margin: 0.6rem 0 0.3rem 0; }
+
+  code { font-family: var(--mono); font-size: 9pt; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 2px; }
+  pre { font-family: var(--mono); font-size: 8.5pt; background: #282c34; color: #abb2bf; padding: 0.5rem 0.7rem; border-radius: 4px; overflow-x: auto; line-height: 1.45; margin: 0.4rem 0; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.4rem 0; font-size: 9pt; page-break-inside: avoid; }
+  table th { background: var(--code-bg); padding: 0.3rem 0.4rem; text-align: left; font-weight: 500; border-bottom: 2px solid var(--accent); }
+  table td { padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table tr:nth-child(even) td { background: #fafaf8; }
+
+  .note { background: #eaf2f8; border-left: 3px solid var(--accent); padding: 0.3rem 0.5rem; margin: 0.4rem 0; border-radius: 0 3px 3px 0; font-size: 9pt; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.5rem 0; }
+
+  footer { margin-top: 1rem; font-size: 8pt; color: #999; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+</style>
+</head>
+<body>
+
+<h1>V4L2 工具速查表</h1>
+
+<section>
+  <h2>v4l2-ctl 常用命令</h2>
+  <table>
+    <tr><th>用途</th><th>命令</th></tr>
+    <tr><td>列出设备</td><td><code>v4l2-ctl --list-devices</code></td></tr>
+    <tr><td>全部信息</td><td><code>v4l2-ctl -d /dev/video0 --all</code></td></tr>
+    <tr><td>设备能力</td><td><code>v4l2-ctl -d /dev/video0 --info</code></td></tr>
+    <tr><td>枚举 CAPTURE 格式</td><td><code>v4l2-ctl -d /dev/video0 --list-formats</code></td></tr>
+    <tr><td>枚举 OUTPUT 格式</td><td><code>v4l2-ctl -d /dev/video0 --list-formats-out</code></td></tr>
+    <tr><td>获取 CAPTURE 格式</td><td><code>v4l2-ctl -d /dev/video0 --get-fmt-video</code></td></tr>
+    <tr><td>获取 OUTPUT 格式</td><td><code>v4l2-ctl -d /dev/video0 --get-fmt-video-out</code></td></tr>
+    <tr><td>设置 OUTPUT 格式</td><td><code>v4l2-ctl -d /dev/video0 --set-fmt-video-out width=1920,height=1080,pixelformat=H264</code></td></tr>
+    <tr><td>列出 controls</td><td><code>v4l2-ctl -d /dev/video0 --list-ctrls</code></td></tr>
+    <tr><td>设置 control</td><td><code>v4l2-ctl -d /dev/video0 --set-ctrl=NAME=VALUE</code></td></tr>
+    <tr><td>订阅事件</td><td><code>v4l2-ctl -d /dev/video0 --subscribe-event=source_change</code></td></tr>
+    <tr><td>等待事件</td><td><code>v4l2-ctl -d /dev/video0 --wait-event=source_change</code></td></tr>
+    <tr><td>抓帧 (MMAP)</td><td><code>v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=10 --stream-to=out.raw</code></td></tr>
+    <tr><td>送帧 (MMAP)</td><td><code>v4l2-ctl -d /dev/video0 --out-mmap --stream-from=in.raw</code></td></tr>
+    <tr><td>decoder drain</td><td><code>v4l2-ctl -d /dev/video0 --decoder-cmd stop</code></td></tr>
+    <tr><td>decoder flush</td><td><code>v4l2-ctl -d /dev/video0 --decoder-cmd flush</code></td></tr>
+    <tr><td>decoder start</td><td><code>v4l2-ctl -d /dev/video0 --decoder-cmd start</code></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>v4l2-compliance</h2>
+  <table>
+    <tr><th>命令</th><th>用途</th></tr>
+    <tr><td><code>v4l2-compliance -d /dev/video0</code></td><td>基本合规性测试</td></tr>
+    <tr><td><code>v4l2-compliance -d /dev/video0 -s</code></td><td>含 streaming 的完整测试</td></tr>
+    <tr><td><code>v4l2-compliance -d /dev/video0 -m2m</code></td><td>mem2mem 设备测试</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>虚拟驱动</h2>
+  <table>
+    <tr><th>驱动</th><th>加载命令</th><th>用途</th></tr>
+    <tr><td>vivid</td><td><code>modprobe vivid</code></td><td>通用视频采集/输出模拟</td></tr>
+    <tr><td>vivid (MPLANE)</td><td><code>modprobe vivid multiplanar=2</code></td><td>多平面 API 模式</td></tr>
+    <tr><td>vivid (Request)</td><td><code>modprobe vivid supports_requests=2</code></td><td>强制使用 Request API</td></tr>
+    <tr><td>vivid (no inj)</td><td><code>modprobe vivid no_error_inj=1</code></td><td>关闭错误注入（配合 v4l2-compliance）</td></tr>
+    <tr><td>vicodec</td><td><code>modprobe vicodec</code></td><td>Stateless FWHT 虚拟编解码器</td></tr>
+    <tr><td>visl</td><td><code>modprobe visl</code></td><td>多格式 stateless 解码器测试框架</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>GStreamer V4L2 插件对照</h2>
+  <div class="two-col">
+    <div>
+      <h3>Stateful</h3>
+      <ul style="font-size:9pt; margin-left:1.2rem;">
+        <li><code>v4l2h264dec</code></li>
+        <li><code>v4l2h265dec</code></li>
+        <li><code>v4l2vp8dec</code></li>
+        <li><code>v4l2vp9dec</code></li>
+        <li><code>v4l2mpeg2dec</code></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Stateless</h3>
+      <ul style="font-size:9pt; margin-left:1.2rem;">
+        <li><code>v4l2slh264dec</code></li>
+        <li><code>v4l2slh265dec</code></li>
+        <li><code>v4l2slvp8dec</code></li>
+        <li><code>v4l2slvp9dec</code></li>
+        <li><code>v4l2slmpeg2dec</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">命名规则：<code>v4l2sl*dec</code> = stateless, <code>v4l2*dec</code> = stateful。</div>
+</section>
+
+<section>
+  <h2>调试工作流</h2>
+  <ol style="font-size:9pt; margin-left:1.2rem;">
+    <li><code>v4l2-ctl --list-devices</code> → 找到目标 /dev/videoX</li>
+    <li><code>v4l2-ctl -d /dev/videoX --all</code> → 全面信息</li>
+    <li><code>v4l2-compliance -d /dev/videoX -m2m -s</code> → 合规测试</li>
+    <li><code>v4l2-ctl -d /dev/videoX --subscribe-event=source_change</code> → 订阅事件</li>
+    <li><code>dmesg | grep -i v4l2</code> → 内核日志</li>
+  </ol>
+</section>
+
+<footer>
+  Part of the V4L2 Learning Track.
+  Sources: <a href="https://github.com/linuxtv/v4l-utils">v4l-utils</a> ·
+  <a href="https://www.kernel.org/doc/html/latest/admin-guide/media/vivid.html">vivid docs</a>
+</footer>
+
+</body>
+</html>
