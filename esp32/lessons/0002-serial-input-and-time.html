@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 2 课：让 loop 同时处理输入和时间</title>
+  <style>
+    :root { --ink:#19232d; --muted:#586575; --line:#dbe2e8; --accent:#126b66; --soft:#edf6f4; --code:#f1f4f6; --warn:#fff7df; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#fcfdfd; font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:860px; margin:auto; padding:42px 22px 72px; }
+    h1,h2 { line-height:1.2; letter-spacing:0; }
+    h1 { font-size:2.55rem; margin:0 0 10px; }
+    h2 { margin-top:40px; border-top:1px solid var(--line); padding-top:18px; }
+    .meta,.muted { color:var(--muted); }
+    .goal { background:var(--soft); border-left:4px solid var(--accent); padding:14px 16px; }
+    .note { background:var(--warn); padding:13px 15px; }
+    pre { overflow:auto; background:var(--code); padding:14px 16px; border-radius:4px; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    a { color:var(--accent); }
+    input { width:100%; padding:10px; border:1px solid #b9c5ce; border-radius:3px; font:inherit; }
+    button { margin-top:10px; padding:9px 13px; color:white; background:var(--accent); border:0; border-radius:3px; font:inherit; cursor:pointer; }
+    #feedback { min-height:1.6em; font-weight:600; }
+    @media print { body { background:white; } main { max-width:none; padding:0; } button,input { display:none; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="0001-serial-feedback.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/nonblocking-loop.html">本课速查</a></p>
+  <h1>让 <code>loop()</code> 同时处理输入和时间</h1>
+  <p class="meta">第 2 课 · 预计 25 分钟 · 串口命令实践</p>
+  <div class="goal"><strong>本课成果：</strong>程序继续每秒心跳，但你可以在监视器里按 <code>1</code>、<code>2</code>、<code>3</code>，立即把周期切换为 250、1000、2500 ms。你将证明等待时间时 ESP32 没有停止处理输入。</div>
+
+  <h2>1. 先从记忆回答</h2>
+  <p>当前代码为什么使用 <code>millis()</code> 比较，而不是在每次翻转 GPIO2 后直接调用 <code>delay(1000)</code>？先说出一个你认为重要的区别。</p>
+
+  <h2>2. 把常量变成状态</h2>
+  <p>打开 <code>esp32-test/src/main.cpp</code>。把固定周期：</p>
+  <pre><code>constexpr uint32_t kIntervalMs = 2500;</code></pre>
+  <p>改为默认值和可变状态：</p>
+  <pre><code>constexpr uint32_t kDefaultIntervalMs = 1000;
+
+uint32_t intervalMs = kDefaultIntervalMs;</code></pre>
+  <p>然后把 <code>loop()</code> 中的 <code>kIntervalMs</code> 改成 <code>intervalMs</code>。</p>
+
+  <h2>3. 加入命令处理器</h2>
+  <p>在 <code>setup()</code> 前加入：</p>
+  <pre><code>void handleSerialInput() {
+  while (Serial.available() &gt; 0) {
+    const char command = static_cast&lt;char&gt;(Serial.read());
+
+    switch (command) {
+      case '1': intervalMs = 250; break;
+      case '2': intervalMs = 1000; break;
+      case '3': intervalMs = 2500; break;
+      case '\r':
+      case '\n': return;
+      default:
+        Serial.printf("unknown command: %c\n", command);
+        return;
+    }
+
+    Serial.printf("interval_ms=%lu\n",
+                  static_cast&lt;unsigned long&gt;(intervalMs));
+  }
+}</code></pre>
+  <p>在 <code>loop()</code> 第一行调用：</p>
+  <pre><code>handleSerialInput();</code></pre>
+  <p>在 <code>setup()</code> 的说明文字后补一行：</p>
+  <pre><code>Serial.println("Commands: 1=250ms 2=1000ms 3=2500ms");</code></pre>
+  <div class="note"><strong>为什么暂时不用实体按键：</strong>你的摄像头板引脚映射尚未确认。随便选择 GPIO 可能与 OV2640 冲突；串口输入可以先学同一个状态机概念。</div>
+
+  <h2>4. 编译、烧录、验证</h2>
+  <pre><code>cd /home/teng.wang/Code/Teach/esp32/esp32-test
+pio run -t upload
+pio device monitor</code></pre>
+  <p>在监视器中依次按 <code>1</code>、<code>3</code>、<code>2</code>。每次都要观察两种证据：</p>
+  <pre><code>interval_ms=250
+heartbeat=... uptime_ms=... gpio2=...
+
+interval_ms=2500
+heartbeat=... uptime_ms=... gpio2=...</code></pre>
+  <p>如果命令能立刻响应，而心跳继续递增，你已经让两个逻辑任务共享同一个 <code>loop()</code>。</p>
+
+  <h2>5. 小挑战</h2>
+  <p>不复制新代码：增加命令 <code>0</code>，让它恢复默认周期。完成前先预测需要修改哪一处，完成后用串口输出证明预测正确。</p>
+
+  <h2>6. 回忆检查</h2>
+  <p>假设把 <code>delay(2500)</code> 放进心跳逻辑，为什么按键或串口命令可能延迟 2.5 秒才响应？请在答案中使用“控制权”和“状态”两个词。</p>
+  <input id="answer" placeholder="用自己的话回答">
+  <button id="check">检查答案</button>
+  <p id="feedback" aria-live="polite"></p>
+
+  <h2>通过标准</h2>
+  <p>你能完成命令 <code>0</code>，并解释 <code>intervalMs</code> 为什么是状态、<code>lastTickMs</code> 为什么记录时间边界，以及长时间 <code>delay</code> 为什么会妨碍 Wi-Fi、摄像头和上传任务共同运行。</p>
+
+  <h2>下一步</h2>
+  <p>进入 <a href="0003-memory-and-fault-feedback.html">第 3 课：读懂内存和故障反馈</a>。那一课会把你刚学到的非阻塞思路，放到“看内存、判断故障”上。</p>
+
+  <p class="muted">遇到编译错误时，把第一条 error 和附近代码发给老师；遇到运行问题时，把启动日志、按下的命令和预期周期一起发来。</p>
+  <p><strong>主资料：</strong><a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html">Espressif Arduino-ESP32 Serial API</a>。时间语义参考 <a href="https://docs.arduino.cc/language-reference/en/functions/time/millis/">Arduino millis()</a>。</p>
+
+  <script>
+    const input = document.querySelector('#answer');
+    document.querySelector('#check').addEventListener('click', () => {
+      const text = input.value.trim();
+      const output = document.querySelector('#feedback');
+      if (!text.includes('控制权') || !text.includes('状态')) {
+        output.textContent = '再想一步：delay 期间 loop 是否把控制权交给了输入处理逻辑？状态又在何时更新？';
+        return;
+      }
+      output.textContent = '关键词齐了。现在用串口实验验证你的解释，而不是只停在文字上。';
+    });
+  </script>
+</main></body>
+</html>

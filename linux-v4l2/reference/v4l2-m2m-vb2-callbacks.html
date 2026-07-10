@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V4L2 m2m/vb2 回调速查表</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  @page { size:A4; margin:12mm; }
+  :root { --text:#222; --bg:#fff; --accent:#1a5276; --code-bg:#f5f3ef; --border:#ddd; --sans:'IBM Plex Sans',-apple-system,sans-serif; --mono:'IBM Plex Mono','SF Mono',monospace; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:var(--sans); color:var(--text); background:var(--bg); font-size:10pt; line-height:1.48; max-width:800px; margin:0 auto; padding:1.5rem; }
+  h1 { font-size:16pt; font-weight:600; color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:.3rem; margin-bottom:.8rem; }
+  h2 { font-size:12pt; font-weight:500; color:var(--accent); margin:1rem 0 .4rem; page-break-after:avoid; }
+  code { font-family:var(--mono); font-size:9pt; background:var(--code-bg); padding:.1em .3em; border-radius:2px; }
+  pre { font-family:var(--mono); font-size:8.5pt; background:var(--code-bg); padding:.5rem .7rem; border-radius:4px; overflow-x:auto; line-height:1.45; margin:.4rem 0; page-break-inside:avoid; }
+  table { width:100%; border-collapse:collapse; margin:.4rem 0; font-size:9pt; page-break-inside:avoid; }
+  th { background:var(--code-bg); padding:.3rem .4rem; text-align:left; font-weight:500; border-bottom:2px solid var(--accent); }
+  td { padding:.3rem .4rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  tr:nth-child(even) td { background:#fafaf8; }
+  .note { background:#eaf2f8; border-left:3px solid var(--accent); padding:.3rem .5rem; margin:.4rem 0; border-radius:0 3px 3px 0; font-size:9pt; }
+  footer { margin-top:1rem; font-size:8pt; color:#999; border-top:1px solid var(--border); padding-top:.5rem; }
+</style>
+</head>
+<body>
+<h1>V4L2 m2m/vb2 回调速查表</h1>
+
+<section>
+  <h2>源码阅读入口</h2>
+  <table>
+    <tr><th>结构</th><th>角色</th><th>先看字段</th></tr>
+    <tr><td><code>struct v4l2_ioctl_ops</code></td><td>用户态 ioctl 入口表</td><td><code>vidioc_s_fmt_*</code>, <code>vidioc_qbuf</code>, <code>vidioc_streamon</code>, <code>vidioc_decoder_cmd</code></td></tr>
+    <tr><td><code>struct vb2_ops</code></td><td>buffer 生命周期回调</td><td><code>queue_setup</code>, <code>buf_prepare</code>, <code>buf_queue</code>, <code>start_streaming</code>, <code>stop_streaming</code></td></tr>
+    <tr><td><code>struct v4l2_m2m_ops</code></td><td>mem2mem 调度回调</td><td><code>device_run</code>, <code>job_ready</code>, <code>job_abort</code></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>ioctl → 回调映射</h2>
+  <table>
+    <tr><th>用户态</th><th>framework/helper</th><th>驱动回调</th></tr>
+    <tr><td><code>VIDIOC_REQBUFS</code></td><td><code>v4l2_m2m_reqbufs</code> → <code>vb2_core_reqbufs</code></td><td><code>vb2_ops.queue_setup</code></td></tr>
+    <tr><td><code>VIDIOC_QBUF</code></td><td><code>v4l2_m2m_qbuf</code> → <code>vb2_core_qbuf</code></td><td><code>buf_prepare</code>, <code>buf_queue</code></td></tr>
+    <tr><td><code>VIDIOC_STREAMON</code></td><td><code>v4l2_m2m_streamon</code> → <code>vb2_core_streamon</code></td><td><code>start_streaming</code></td></tr>
+    <tr><td>job 调度</td><td><code>v4l2_m2m_try_schedule</code></td><td><code>job_ready</code>, <code>device_run</code></td></tr>
+    <tr><td>硬件完成</td><td><code>v4l2_m2m_job_finish</code> / <code>v4l2_m2m_buf_done_and_job_finish</code></td><td>interrupt handler / workqueue / firmware callback</td></tr>
+    <tr><td><code>VIDIOC_DQBUF</code></td><td><code>v4l2_m2m_dqbuf</code> → <code>vb2_core_dqbuf</code></td><td><code>buf_finish</code> optional</td></tr>
+    <tr><td><code>VIDIOC_STREAMOFF</code></td><td><code>v4l2_m2m_streamoff</code> → <code>vb2_core_streamoff</code></td><td><code>stop_streaming</code></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>vb2_ops 语义</h2>
+  <table>
+    <tr><th>回调</th><th>何时发生</th><th>常见职责</th></tr>
+    <tr><td><code>queue_setup</code></td><td><code>REQBUFS</code>/<code>CREATE_BUFS</code></td><td>决定 buffer 数量、plane 数量、每 plane size</td></tr>
+    <tr><td><code>buf_prepare</code></td><td>buffer 从用户交给内核时</td><td>验证 <code>bytesused</code>、plane size、payload 合法性</td></tr>
+    <tr><td><code>buf_queue</code></td><td>buffer 进入 driver queue 时</td><td>通常调用 <code>v4l2_m2m_buf_queue()</code></td></tr>
+    <tr><td><code>start_streaming</code></td><td>队列进入 streaming</td><td>打开 clock/power、初始化硬件队列、清状态</td></tr>
+    <tr><td><code>stop_streaming</code></td><td>STREAMOFF 或 close</td><td>停止 DMA/硬件，归还所有未完成 buffer</td></tr>
+    <tr><td><code>buf_finish</code></td><td>DQBUF 前</td><td>可做 cache sync、metadata 修正</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>m2m_ops 语义</h2>
+  <table>
+    <tr><th>回调</th><th>语义</th><th>注意点</th></tr>
+    <tr><td><code>device_run</code></td><td>开始一次 transaction</td><td>通常异步返回；完成时必须调用 job finish</td></tr>
+    <tr><td><code>job_ready</code></td><td>判断当前 context 是否真的可运行</td><td>不可睡眠；用于额外条件，如 header 已解析、buffer 数量足够</td></tr>
+    <tr><td><code>job_abort</code></td><td>请求尽快中止当前 transaction</td><td>安全停止后仍需按完成路径释放 job</td></tr>
+  </table>
+  <div class="note">基础调度条件：至少一个 source/OUTPUT buffer、至少一个 destination/CAPTURE buffer、streaming 已开启。driver 的 <code>job_ready</code> 可以加更严格条件。</div>
+</section>
+
+<section>
+  <h2>一次 job 的完成路径</h2>
+  <pre><code>interrupt / firmware callback
+  -> identify src/dst buffers
+  -> set bytesused / timestamp / flags
+  -> mark OUTPUT done
+  -> mark CAPTURE done
+  -> v4l2_m2m_job_finish()
+
+stateless multi-slice drivers:
+  -> v4l2_m2m_buf_done_and_job_finish()
+     handles held CAPTURE buffers</code></pre>
+</section>
+
+<section>
+  <h2>搜索清单</h2>
+  <table>
+    <tr><th>搜索</th><th>目的</th></tr>
+    <tr><td><code>v4l2_m2m_ctx_init</code></td><td>open() 如何创建 per-instance context</td></tr>
+    <tr><td><code>queue_init</code></td><td>OUTPUT/CAPTURE 的 vb2_queue 如何配置</td></tr>
+    <tr><td><code>device_run</code></td><td>硬件 transaction 入口</td></tr>
+    <tr><td><code>vb2_buffer_done</code></td><td>buffer 从驱动归还给 vb2 的位置</td></tr>
+    <tr><td><code>V4L2_BUF_FLAG_LAST</code></td><td>drain/DRC 最后一帧处理</td></tr>
+    <tr><td><code>supports_requests</code> / <code>requires_requests</code></td><td>是否是 stateless/request 驱动路径</td></tr>
+  </table>
+</section>
+
+<footer>
+  Sources: <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-mem2mem.html">V4L2 mem2mem</a> ·
+  <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-videobuf2.html">videobuf2</a>.
+  Part of the V4L2 Learning Track.
+</footer>
+</body>
+</html>

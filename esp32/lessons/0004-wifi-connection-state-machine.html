@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 4 课：让 ESP32 连上网——非阻塞连接状态机</title>
+  <style>
+    :root { --ink:#19232d; --muted:#586575; --line:#dbe2e8; --accent:#126b66; --soft:#eef6f5; --warn:#fff7df; --code:#f1f4f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#fcfdfd; font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:860px; margin:auto; padding:42px 22px 72px; }
+    h1,h2 { line-height:1.2; letter-spacing:0; }
+    h1 { font-size:2.4rem; margin:0 0 10px; }
+    h2 { margin-top:40px; border-top:1px solid var(--line); padding-top:18px; }
+    .meta,.muted { color:var(--muted); }
+    .goal { background:var(--soft); border-left:4px solid var(--accent); padding:14px 16px; }
+    .note { background:var(--warn); padding:13px 15px; }
+    .warn { background:#fdecea; border-left:4px solid #c33; padding:13px 15px; }
+    pre { overflow:auto; background:var(--code); padding:14px 16px; border-radius:4px; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    a { color:var(--accent); }
+    input { width:100%; padding:10px; border:1px solid #b9c5ce; border-radius:3px; font:inherit; }
+    button { margin-top:10px; padding:9px 13px; color:white; background:var(--accent); border:0; border-radius:3px; font:inherit; cursor:pointer; }
+    #feedback { min-height:1.6em; font-weight:600; }
+    table { width:100%; border-collapse:collapse; margin:10px 0 0; }
+    th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); }
+    @media print { body { background:white; } main { max-width:none; padding:0; } button,input { display:none; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="0003-memory-and-fault-feedback.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/wifi-connection-reference.html">本课速查</a></p>
+  <h1>让 ESP32 连上网</h1>
+  <p class="meta">第 4 课 · 阶段二第 1 课 · 预计 30 分钟 · 真实设备实践</p>
+  <div class="goal"><strong>本课成果：</strong>ESP32 启动后自动连上你当前局域网，串口打印 IP、信号强度和重连次数；你拔掉路由器/输错密码时，能看到状态从 <code>CONNECTED</code> 跳到 <code>CONNECTION_LOST</code> 再自动回来——而心跳和串口命令全程不被冻结。这一课把第 2 课的非阻塞直觉第一次用在外设上。</div>
+
+  <h2>1. 先回忆</h2>
+  <p>第 2 课里，你为什么用 <code>millis()</code> 比较而不是 <code>delay(2500)</code>？请用“控制权”和“状态”两个词回答。这一课的每个 Wi-Fi 检查都要遵守同一条：不能把 <code>loop()</code> 锁死。
+
+  <h2>2. 准备凭据，别提交进仓库</h2>
+  <p>新建文件 <code>esp32-test/src/secrets.h</code>，写入你自己的 SSID 和密码：</p>
+  <pre><code>#pragma once
+#define WIFI_SSID "你的SSID"
+#define WIFI_PASS "你的密码"</code></pre>
+  <div class="warn"><strong>安全：</strong>这是密钥，<em>不要</em>提交进 git。在 <code>esp32-test/.gitignore</code>（没有就新建）里加一行 <code>src/secrets.h</code>。如果仓库已跟踪它，先 <code>git rm --cached src/secrets.h</code> 再忽略。</div>
+  <p>把凭据单独放在一个文件里，是为了让 <code>main.cpp</code> 可以毫无顾忌地展示和共享，而密码只留在你本机。以后的摄像头帧、HTTP 接口都不需要再碰它。</p>
+
+  <h2>3. 加状态机骨架</h2>
+  <p>打开 <code>esp32-test/src/main.cpp</code>，在顶部 include 区加：</p>
+  <pre><code>#include &lt;WiFi.h&gt;
+#include "secrets.h"</code></pre>
+  <p>在现有的匿名命名空间里（和 <code>intervalMs</code> 同一处）加几个 Wi-Fi 状态变量：</p>
+  <pre><code>constexpr uint32_t kWifiCheckIntervalMs = 500;
+uint32_t lastWifiCheckMs = 0;
+wl_status_t lastWifiStatus = WL_NO_SHIELD;
+uint32_t wifiRetry = 0;
+bool wifiIpPrinted = false;</code></pre>
+  <p>这些就是第 2 课“状态”的延续：<code>lastWifiStatus</code> 记录上次看到的状态，<code>wifiRetry</code> 记录断了几次。
+
+  <h2>4. 把状态名变成可读文字</h2>
+  <p>在 <code>handleSerialInput()</code> 之前加一个映射函数，把枚举转成名字，免得日志里只看到数字：</p>
+  <pre><code>static const char* wifiStatusName(wl_status_t s) {
+    switch (s) {
+    case WL_NO_SHIELD:       return "NO_SHIELD";
+    case WL_IDLE_STATUS:     return "IDLE";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID";
+    case WL_CONNECTED:       return "CONNECTED";
+    case WL_CONNECT_FAILED:  return "CONNECT_FAILED";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED:    return "DISCONNECTED";
+    default:                 return "?";
+    }
+}</code></pre>
+  <p>这串名字的取值来自你本机安装的 <code>libraries/WiFi/src/WiFiType.h</code>，不是文档截图——以本地头文件为准。</p>
+
+  <h2>5. 一次性启动连接</h2>
+  <p>在 <code>setup()</code> 里、那一堆 <code>Serial.printf</code> 自报家门之后，加一个只跑一次的启动函数：</p>
+  <pre><code>static void wifiBegin() {
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    lastWifiStatus = WiFi.status();
+    Serial.printf("wifi: connecting to %s (start=%s)\n",
+                  WIFI_SSID, wifiStatusName(lastWifiStatus));
+}</code></pre>
+  <p>然后在 <code>setup()</code> 末尾调用 <code>wifiBegin();</code>。</p>
+  <div class="note"><strong>关键点：</strong><code>WiFi.begin()</code> 是<em>非阻塞</em>的，它一调用就返回，真正的连接在后台进行。我们靠轮询 <code>WiFi.status()</code> 来观察进度——这和心跳用 <code>millis()</code> 是同一种思路：把控制权留在 <code>loop()</code> 里。</div>
+
+  <h2>6. 在 loop 里非阻塞地观察</h2>
+  <p>加一个每次 <code>loop()</code> 都会调用的函数，用第 2 课的时间门控：</p>
+  <pre><code>static void wifiLoop() {
+    const uint32_t now = millis();
+    if (now - lastWifiCheckMs &lt; kWifiCheckIntervalMs) return;
+    lastWifiCheckMs = now;
+
+    const wl_status_t s = WiFi.status();
+
+    if (s == WL_CONNECTED) {
+        if (!wifiIpPrinted) {
+            Serial.printf("wifi: CONNECTED ip=%s rssi=%d retries=%lu\n",
+                          WiFi.localIP().toString().c_str(),
+                          static_cast&lt;int&gt;(WiFi.RSSI()),
+                          static_cast&lt;unsigned long&gt;(wifiRetry));
+            wifiIpPrinted = true;
+        }
+        return;
+    }
+
+    wifiIpPrinted = false;  // 一旦掉线，下次连上要重新打印
+
+    if (s != lastWifiStatus) {
+        if (lastWifiStatus == WL_CONNECTED) ++wifiRetry;
+        Serial.printf("wifi: %s -> %s retries=%lu\n",
+                      wifiStatusName(lastWifiStatus),
+                      wifiStatusName(s),
+                      static_cast&lt;unsigned long&gt;(wifiRetry));
+        lastWifiStatus = s;
+    } else {
+        Serial.print(".");  // 同一状态停留时，每 500ms 推进一下进度
+    }
+}</code></pre>
+  <p>在 <code>loop()</code> 顶部、<code>handleSerialInput();</code> 之后调用 <code>wifiLoop();</code>。现在 <code>loop()</code> 同时承担三件事：读串口命令、推进 Wi-Fi 观察、维持心跳——且没有一个是阻塞的。</p>
+
+  <h2>7. 编译、烧录、验证</h2>
+  <pre><code>cd /home/teng.wang/Code/Teach/esp32/esp32-test
+pio run -t upload
+pio device monitor</code></pre>
+  <p>正常路径应看到（行号略）：</p>
+  <pre><code>=== ESP32 test firmware ===
+Free heap: ... bytes
+wifi: connecting to 你的SSID (start=IDLE)
+wifi: IDLE -> CONNECTED ip=192.168.x.x rssi=-52 retries=0
+heartbeat=1 uptime_ms=... free_heap=... gpio2=HIGH</pre></pre>
+  <p>心跳继续递增，证明 <code>loop()</code> 没有被 Wi-Fi 冻结。</p>
+
+  <h2>8. 故意制造一次断线</h2>
+  <ol>
+    <li>在串口监视器里按 <code>1 / 2 / 3</code> 仍能立刻切换周期——验证 Wi-Fi 与命令共存。</li>
+    <li>关掉路由器 Wi-Fi 或拔离太远，约 5 秒内查看日志，应看到 <code>CONNECTED -> DISCONNECTED</code> 或 <code>-> CONNECTION_LOST</code>，<code>retries</code> 增加。</li>
+    <li>恢复 AP，因为 <code>setAutoReconnect(true)</code>，应看到自动回到 <code>CONNECTED</code> 并重新打印 IP。</li>
+    <li>把 <code>secrets.h</code> 里的密码改错一个字符重新烧录，应看到停在 <code>CONNECT_FAILED</code>——这是一类“没起来”的故障，对应第 3 课的三分类。</li>
+  </ol>
+
+  <h2>9. 小挑战</h2>
+  <p>在 <code>handleSerialInput()</code> 里加一个命令 <code>r</code>，调用 <code>WiFi.reconnect();</code>，并立刻清空 <code>wifiIpPrinted</code> 和 <code>lastWifiStatus</code>。预测一下：按 <code>r</code> 之后，你会先看到哪个状态？（提示：强制重连不是立即 <code>WL_CONNECTED</code>）。用日志验证你的预测。</p>
+
+  <h2>10. 回忆检查</h2>
+  <p>本机 <code>wl_status_t</code> 枚举里，唯一表示“已连接并可用”的是哪一个？为什么我们非要在 <code>loop()</code> 里轮询它，而不能沿用官方示例里的 <code>while (WiFi.status() != WL_CONNECTED) delay(500);</code>？请在答案中同时出现“<code>WL_CONNECTED</code>”和“控制权”。</p>
+  <input id="answer" placeholder="用自己的话回答">
+  <button id="check">检查答案</button>
+  <p id="feedback" aria-live="polite"></p>
+
+  <h2>通过标准</h2>
+  <ul>
+    <li>ESP32 自动连上当前局域网，串口打印 IP 和 RSSI，心跳不中断。</li>
+    <li>能说出 <code>WL_CONNECTED</code> 之外至少三个状态的含义。</li>
+    <li>能解释为什么用 <code>millis()</code> 轮询而非阻塞 <code>while+delay</code>，并指出后者会破坏什么。</li>
+    <li>能看到一次真实的断线→自动重连，并能从 <code>retries</code> 数字读出发生了什么。</li>
+  </ul>
+
+  <h2>下一步</h2>
+  <p>进入 <a href="../CURRICULUM.md">课程路线</a>中的第 5 课：HTTP 状态接口。那一课会在这条已经稳的 Wi-Fi 连接上，开一个 <code>/health</code> 让浏览器反向读取设备的 uptime、RSSI 和 free heap——第一次让“外部世界”访问你的 ESP32。</p>
+
+  <p class="muted">把启动日志、连上后的那行 IP/rssi、以及一次断线→重连的日志三段一起发给老师。遇到停在 <code>NO_SSID_AVAIL</code> 或 <code>CONNECT_FAILED</code> 时，先核对 SSID 拼写、2.4GHz、密码，再发代码。</p>
+  <p><strong>主资料：</strong><a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html">Arduino-ESP32 WiFi API</a>。枚举值以本机 <code>libraries/WiFi/src/WiFiType.h</code> 为准，本课速查见 <a href="../reference/wifi-connection-reference.html">Wi-Fi 连接速查</a>。</p>
+
+  <script>
+    const input = document.querySelector('#answer');
+    document.querySelector('#check').addEventListener('click', () => {
+      const t = input.value.trim();
+      const out = document.querySelector('#feedback');
+      if (!t.includes('WL_CONNECTED')) {
+        out.textContent = '先把那个唯一“可用”的状态名写出来——它和别的都不同。';
+        return;
+      }
+      if (!t.includes('控制权')) {
+        out.textContent = '再补一层：阻塞写法会把控制权锁在谁手里？loop 还能干别的吗？';
+        return;
+      }
+      out.textContent = '关键词齐了。现在到设备上用一次断线日志证明你的解释，而不是停在文字上。';
+    });
+  </script>
+</main></body>
+</html>

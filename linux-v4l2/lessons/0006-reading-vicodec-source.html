@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 6: 带读 vicodec 源码</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root{--text:#222;--bg:#faf9f7;--accent:#1a5276;--link:#2980b9;--code:#f0ede8;--border:#ddd;--ok:#27ae60;--bad:#c0392b;--sans:'IBM Plex Sans',sans-serif;--mono:'IBM Plex Mono',monospace}
+*{box-sizing:border-box}body{font-family:var(--sans);color:var(--text);background:var(--bg);line-height:1.6;font-size:16px;margin:0}.wrap{max-width:780px;margin:auto;padding:2rem 1.5rem}
+header{border-bottom:2px solid var(--accent);padding-bottom:1.3rem;margin-bottom:2rem}.num{font:0.75rem var(--mono);letter-spacing:.08em;color:var(--accent)}h1{font-size:1.75rem;line-height:1.2;color:var(--accent);margin:.5rem 0}.sub{color:#555;font-size:.95rem}
+h2{font-size:1.25rem;color:var(--accent);font-weight:500;margin:2rem 0 .7rem}h3{color:var(--link);font-size:1.05rem}p{margin:0 0 1rem}a{color:var(--link);text-decoration:none}code{font:0.85em var(--mono);background:var(--code);padding:.15em .4em;border-radius:3px}pre{font:.8rem var(--mono);line-height:1.5;background:#282c34;color:#abb2bf;padding:1rem 1.2rem;border-radius:6px;overflow:auto;margin:1rem 0}pre code{background:none;padding:0;font:inherit}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin:1rem 0}th{background:var(--code);text-align:left;padding:.5rem .7rem;border-bottom:2px solid var(--accent);font-weight:500}td{padding:.45rem .7rem;border-bottom:1px solid var(--border);vertical-align:top}tr:nth-child(even) td{background:#fdfdfb}
+.box{background:#eaf2f8;border-left:3px solid var(--accent);padding:.75rem 1rem;margin:1rem 0;font-size:.92rem}.warn{background:#fef9e7;border-left:3px solid #f39c12}
+.path{background:#fff;border:1px solid var(--border);border-radius:8px;padding:1rem;font: .82rem/1.9 var(--mono);margin:1rem 0}.node{display:inline-block;border:1px solid var(--accent);color:var(--accent);background:#eaf2f8;border-radius:5px;padding:.1rem .4rem;margin:.1rem}.arrow{color:#777}
+.quiz{background:#fff;border:1px solid var(--border);border-radius:8px;padding:1.1rem;margin:1rem 0}.q{font-weight:500}.option{display:block;border:1px solid var(--border);border-radius:5px;padding:.45rem .7rem;margin:.25rem 0;cursor:pointer;font-size:.92rem}.option.correct{border-color:var(--ok);background:#eafaf1}.option.wrong{border-color:var(--bad);background:#fdedec}.feedback{display:none;margin-top:.7rem;padding:.5rem .7rem;border-radius:5px;font-size:.9rem}.feedback.show{display:block}.feedback.correct{background:#eafaf1;color:#1e8449}.feedback.wrong{background:#fdedec;color:#922b21}hr{border:0;border-top:1px solid var(--border);margin:2rem 0 1rem}footer{border-top:1px solid var(--border);padding-top:1rem;color:#888;font-size:.8rem;margin-top:2rem}
+</style>
+</head>
+<body><div class="wrap">
+<header><div class="num">LESSON 6</div><h1>带读 vicodec 源码</h1><div class="sub">把 ioctl → vb2 → m2m 的地图，落到一个可读的 Linux 虚拟 codec 驱动</div></header>
+<nav style="font-size:.85rem;color:#888;margin-bottom:2rem">← <a href="0005-ioctl-to-driver-callbacks.html">Lesson 5</a> · <a href="../reference/vicodec-source-reading-map.html">源码阅读地图</a></nav>
+
+<h2>0. 本课目标</h2>
+<p>今天不读 FWHT 算法，只回答一个工程问题：拿到 decoder 驱动后，怎样在十分钟内找到设备注册、队列配置、job 调度和 buffer 完成四个位置。</p>
+<div class="box"><strong>单一胜利：</strong>用五个符号串起主路径：<code>vicodec_probe</code> → <code>queue_init</code> → <code>buf_queue</code> → <code>job_ready/device_run</code> → <code>v4l2_m2m_job_finish</code>。</div>
+
+<h2>1. 先看驱动注册了什么</h2>
+<p>当前内核的 <code>vicodec-core.c</code> 是测试 codec framework 的虚拟设备。它没有真实硬件寄存器，而是用内存模拟编码/解码；但保留了真实 mem2mem 驱动需要的结构。</p>
+<pre>vicodec_probe()
+  ├─ register_instance("stateful-encoder",  true,  false)
+  ├─ register_instance("stateful-decoder",  false, false)
+  └─ register_instance("stateless-decoder", false, true)
+
+register_instance()
+  ├─ v4l2_m2m_init(&amp;m2m_ops)
+  ├─ vdev-&gt;ioctl_ops = &amp;vicodec_ioctl_ops
+  └─ video_register_device(...)</pre>
+<p>同一个驱动可以暴露多个 video node；stateful/stateless 的差异会落到每个 instance 的 <code>ctx-&gt;is_stateless</code> 分支。</p>
+<div class="box warn"><strong>不要混淆：</strong><code>vicodec_dev</code> 是设备级对象；<code>vicodec_ctx</code> 保存一个 file handle 的 queue format、codec state 和 m2m context。</div>
+
+<h2>2. queue_init：两条 vb2 队列的出生证明</h2>
+<p>open 路径通过 <code>v4l2_m2m_ctx_init(..., queue_init)</code> 创建 per-filehandle 的 OUTPUT/CAPTURE 队列。两条队列共用 <code>vicodec_qops</code>，但 type 不同。</p>
+<table><tr><th>字段</th><th>vicodec 设置</th><th>阅读意义</th></tr>
+<tr><td><code>type</code></td><td>OUTPUT / CAPTURE（可选 MPLANE）</td><td>输入码流 / 解码帧</td></tr>
+<tr><td><code>ops</code></td><td><code>&amp;vicodec_qops</code></td><td>queue_setup、buf_prepare、buf_queue 等回调</td></tr>
+<tr><td><code>mem_ops</code></td><td><code>vb2_vmalloc_memops</code></td><td>虚拟驱动用 vmalloc；真实硬件常用 DMA allocator</td></tr>
+<tr><td><code>supports_requests</code></td><td>stateless 为 true</td><td>允许 controls 与 buffer 绑定到 Request</td></tr>
+<tr><td><code>requires_requests</code></td><td>stateless 为 true</td><td>每个 stateless 输入 buffer 都必须有 Request</td></tr></table>
+<p>这就是上一课的源码落点：<code>v4l2_m2m</code> 组合两条 vb2 queue，驱动通过 <code>queue_init</code> 注入自己的 queue policy。</p>
+
+<h2>3. buf_queue → job_ready：QBUF 不等于马上运行</h2>
+<p>QBUF 会走到 <code>vicodec_buf_queue()</code>，通常再调用 <code>v4l2_m2m_buf_queue()</code>。这只表示 buffer ready；m2m framework 还要判断 job 能否运行。</p>
+<div class="path"><span class="node">QBUF</span><span class="arrow">→</span><span class="node">buf_prepare</span><span class="arrow">→</span><span class="node">buf_queue</span><span class="arrow">→</span><span class="node">try_schedule</span><span class="arrow">→</span><span class="node">job_ready</span></div>
+<p>vicodec 的 <code>job_ready()</code> 展示了 decoder 的现实：即使两条 queue 都有 buffer，也可能还不能跑。stateful decoder 需要先扫描完整 frame header；等待更多码流时返回 0。</p>
+<pre>static const struct v4l2_m2m_ops m2m_ops = {
+    .device_run = device_run,
+    .job_ready  = job_ready,
+};
+
+job_ready(ctx):
+  if (source_changed) return 0;
+  if (stateless || encoder || complete_frame_ready) return 1;
+  scan OUTPUT for a complete frame;
+  return frame_ready ? 1 : 0;</pre>
+<p>调试“QBUF 成功但没有 DQBUF”时，除了检查 streaming 和 buffer 数量，还要看 <code>job_ready</code> 是否因 header、DRC 或 Request 条件拒绝调度。</p>
+
+<h2>4. device_run：一次 transaction 的核心</h2>
+<p><code>device_run()</code> 是 m2m framework 把设备所有权交给当前 context 后调用的入口。vicodec 在这里取 source/destination buffer，执行 <code>device_process()</code>，设置 payload、sequence、metadata 和 flags。</p>
+<pre>device_run(ctx)
+  ├─ src = v4l2_m2m_next_src_buf(ctx-&gt;m2m_ctx)
+  ├─ dst = v4l2_m2m_dst_buf_remove(ctx-&gt;m2m_ctx)
+  ├─ device_process(ctx, src, dst)
+  ├─ v4l2_m2m_buf_copy_metadata(src, dst)
+  ├─ v4l2_m2m_buf_done(src, state)
+  ├─ v4l2_m2m_buf_done(dst, state)
+  └─ v4l2_m2m_job_finish(m2m_dev, ctx-&gt;m2m_ctx)</pre>
+<p>真实硬件驱动通常把第三步替换为“写寄存器/提交 firmware”，然后在中断或异步 callback 中完成最后三步。<code>DQBUF</code> 只是消费已经被 <code>buffer_done</code> 标记的 buffer。</p>
+
+<h2>5. 把 stateless Request API 放回源码</h2>
+<p>stateless instance 在 <code>queue_init</code> 中设置 <code>requires_requests = true</code>。在 <code>device_process</code> 中，它从 source buffer 找到 <code>req_obj.req</code>，调用 <code>v4l2_ctrl_request_setup()</code>，把本次 frame 的 codec controls 装载到 context。</p>
+<pre>stateless OUTPUT buffer
+  └─ req_obj.req
+       └─ v4l2_ctrl_request_setup(req, &amp;ctx-&gt;hdl)
+            └─ 本帧解码参数
+
+完成后：v4l2_ctrl_request_complete(req, &amp;ctx-&gt;hdl)</pre>
+<p>这对应第三课的模型：Request 是“这个 coded buffer 与这组 controls”的原子绑定。驱动从当前 buffer 关联的 Request 取参数，而不是从跨帧全局变量猜参数。</p>
+
+<h2>6. DRC 与 drain：在完成路径找协议语义</h2>
+<table><tr><th>现象</th><th>源码信号</th><th>用户态含义</th></tr>
+<tr><td>分辨率变化</td><td><code>source_changed</code>，暂缓 <code>job_ready</code></td><td>处理 source-change event，重新配置 CAPTURE</td></tr>
+<tr><td>最后一帧</td><td>CAPTURE 加 <code>V4L2_BUF_FLAG_LAST</code>，排队 EOS event</td><td>用户识别 drain 结束</td></tr>
+<tr><td>Request 完成</td><td><code>v4l2_ctrl_request_complete()</code></td><td>本帧 controls 生命周期结束</td></tr></table>
+<p>读真实 driver 时，先搜索 <code>V4L2_BUF_FLAG_LAST</code>、<code>V4L2_EVENT_SOURCE_CHANGE</code> 和 <code>v4l2_ctrl_request_complete</code>，通常比从格式协商开始更快找到 decoder 的协议语义。</p>
+
+<hr><h2>7. 小测验</h2>
+<div class="quiz" id="quiz1"><p class="q">1. stateless 队列为什么设置 requires_requests？</p><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">为了强制使用 MMAP</div><div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz1')">要求每个输入 buffer 绑定 Request</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">为了禁止 CAPTURE queue</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">为了自动开启 drain</div><div class="feedback"></div></div>
+<div class="quiz" id="quiz2"><p class="q">2. QBUF 成功但没有立即执行 job，最值得先检查什么？</p><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">video_device 的名字</div><div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz2')">job_ready 的附加条件</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">CAPTURE 的 timestamp 格式</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">驱动模块作者</div><div class="feedback"></div></div>
+<div class="quiz" id="quiz3"><p class="q">3. DQBUF 能拿到 buffer，驱动侧通常先做了什么？</p><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">重新调用 S_FMT</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">销毁 v4l2_m2m_ctx</div><div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz3')">调用 buffer_done 标记完成</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">卸载 vicodec 模块</div><div class="feedback"></div></div>
+<div class="quiz" id="quiz4"><p class="q">4. 哪个对象代表一次 open 的独立解码上下文？</p><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">vicodec_dev</div><div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz4')">vicodec_ctx</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">pixfmt_info</div><div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">platform_device</div><div class="feedback"></div></div>
+
+<hr><h2>8. 课后源码练习</h2>
+<p>打开 <a href="https://github.com/torvalds/linux/blob/master/drivers/media/test-drivers/vicodec/vicodec-core.c">vicodec-core.c</a>，搜索以下五个符号，并把每个符号所在函数写成一句话：</p>
+<pre>queue_init
+vicodec_buf_queue
+job_ready
+device_run
+v4l2_m2m_job_finish</pre>
+<p>下一节可以把这张地图套到你工作中的真实 decoder；源码片段看不懂时，直接贴出来，我们按层定位。</p>
+<footer>Primary sources: <a href="https://github.com/torvalds/linux/blob/master/drivers/media/test-drivers/vicodec/vicodec-core.c">Linux vicodec source</a> · <a href="https://docs.kernel.org/userspace-api/media/v4l/dev-mem2mem.html">V4L2 mem2mem interface</a> · <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-mem2mem.html">mem2mem framework</a></footer>
+</div>
+<script>
+function checkAnswer(el,id){var q=document.getElementById(id),os=q.querySelectorAll('.option'),f=q.querySelector('.feedback'),ok=el.getAttribute('data-answer')==='correct';os.forEach(function(o){o.onclick=null;o.style.cursor='default';if(o===el)o.classList.add(ok?'correct':'wrong');else if(o.getAttribute('data-answer')==='correct')o.classList.add('correct')});f.classList.add('show',ok?'correct':'wrong');f.textContent=ok?'正确。':'再想想。回到本课的源码路径。'}
+</script>
+</body></html>

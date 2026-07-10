@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 5: 从 ioctl 追到驱动回调</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@350;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  :root { --text:#222; --bg:#faf9f7; --accent:#1a5276; --accent-light:#2980b9; --code-bg:#f0ede8; --border:#ddd; --success:#27ae60; --error:#c0392b; --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --mono:'IBM Plex Mono','SF Mono','Fira Code',monospace; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:var(--sans); color:var(--text); background:var(--bg); line-height:1.6; font-weight:350; font-size:16px; -webkit-font-smoothing:antialiased; }
+  .container { max-width:760px; margin:0 auto; padding:2rem 1.5rem; }
+  header { margin-bottom:2.5rem; border-bottom:2px solid var(--accent); padding-bottom:1.5rem; }
+  header .lesson-num { font-family:var(--mono); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin-bottom:.5rem; }
+  header h1 { font-size:1.75rem; font-weight:600; line-height:1.2; color:var(--accent); margin-bottom:.5rem; }
+  header .subtitle { font-size:.95rem; color:#555; }
+  h2 { font-size:1.25rem; font-weight:500; color:var(--accent); margin:2rem 0 .75rem; padding-top:1rem; }
+  h3 { font-size:1.05rem; font-weight:500; color:var(--accent-light); margin:1.5rem 0 .5rem; }
+  p { margin-bottom:1rem; }
+  a { color:var(--accent-light); text-decoration:none; border-bottom:1px solid transparent; }
+  a:hover { border-bottom-color:var(--accent-light); }
+  code { font-family:var(--mono); font-size:.85em; background:var(--code-bg); padding:.15em .4em; border-radius:3px; }
+  pre { font-family:var(--mono); font-size:.82rem; background:#282c34; color:#abb2bf; padding:1rem 1.2rem; border-radius:6px; overflow-x:auto; margin:1rem 0; line-height:1.5; }
+  pre code { background:none; padding:0; color:inherit; font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:.9rem; }
+  th { background:var(--code-bg); padding:.5rem .7rem; text-align:left; font-weight:500; border-bottom:2px solid var(--accent); }
+  td { padding:.45rem .7rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  tr:nth-child(even) td { background:#fdfdfb; }
+  .info-box { background:#eaf2f8; border-left:3px solid var(--accent); padding:.75rem 1rem; margin:1rem 0; border-radius:0 4px 4px 0; font-size:.92rem; }
+  .warn-box { background:#fef9e7; border-left:3px solid #f39c12; padding:.75rem 1rem; margin:1rem 0; border-radius:0 4px 4px 0; font-size:.92rem; }
+  .path { font-family:var(--mono); background:#fff; border:1px solid var(--border); border-radius:8px; padding:1rem; margin:1.5rem 0; font-size:.86rem; line-height:1.9; }
+  .node { display:inline-block; border:1px solid var(--accent); color:var(--accent); background:#eaf2f8; border-radius:5px; padding:.15rem .45rem; margin:.1rem; white-space:nowrap; }
+  .arrow { color:#777; padding:0 .25rem; }
+  .quiz { background:#fff; border:1px solid var(--border); border-radius:8px; padding:1.25rem; margin:1.5rem 0; }
+  .quiz p.quiz-q { font-weight:500; margin-bottom:.75rem; }
+  .quiz .option { display:block; padding:.5rem .75rem; margin:.25rem 0; border:1px solid var(--border); border-radius:5px; cursor:pointer; transition:background .12s,border-color .12s; font-size:.92rem; }
+  .quiz .option:hover { background:#f5f3ef; }
+  .quiz .option.selected { border-color:var(--accent-light); background:#eaf2f8; }
+  .quiz .option.correct { border-color:var(--success); background:#eafaf1; }
+  .quiz .option.wrong { border-color:var(--error); background:#fdedec; }
+  .quiz .feedback { margin-top:.75rem; padding:.5rem .75rem; border-radius:5px; font-size:.9rem; display:none; }
+  .quiz .feedback.show { display:block; }
+  .quiz .feedback.correct { background:#eafaf1; color:#1e8449; }
+  .quiz .feedback.wrong { background:#fdedec; color:#922b21; }
+  hr { border:none; border-top:1px solid var(--border); margin:2.5rem 0 1.5rem; }
+  .next-steps ul { margin:.5rem 0 1rem 1.5rem; }
+  .next-steps li { margin-bottom:.35rem; }
+  footer { margin-top:2rem; font-size:.8rem; color:#888; border-top:1px solid var(--border); padding-top:1rem; }
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+  <div class="lesson-num">Lesson 5</div>
+  <h1>从 ioctl 追到驱动回调</h1>
+  <div class="subtitle">把用户态的 S_FMT/QBUF/STREAMON/DQBUF 映射到 v4l2_m2m、videobuf2 和驱动核心函数</div>
+</header>
+
+<nav style="margin:0 0 2rem 0; font-size:.85rem; color:#888;">
+  ← <a href="0004-V4L2-Tools-Practice.html">Lesson 4: V4L2 调试工具实战</a>
+  &nbsp;|&nbsp;
+  <a href="../reference/v4l2-m2m-vb2-callbacks.html">参考：m2m/vb2 回调速查</a>
+</nav>
+
+<section>
+  <h2>0. 本课目标</h2>
+  <p>前几课你已经会从用户态理解 decoder：<code>OUTPUT</code> 放 coded bitstream，<code>CAPTURE</code> 取 decoded frame。现在要跨过源码阅读的第一道坎：看到一个驱动时，知道从哪里开始追。</p>
+  <div class="info-box"><strong>今天的单一胜利：</strong>拿到一个 V4L2 decoder 驱动后，你能先找 3 组表：<code>v4l2_ioctl_ops</code>、<code>vb2_ops</code>、<code>v4l2_m2m_ops</code>，再把用户态 ioctl 对应到具体驱动回调。</div>
+</section>
+
+<section>
+  <h2>1. 四层 mental model</h2>
+  <div class="path">
+    <span class="node">userspace ioctl</span><span class="arrow">→</span>
+    <span class="node">v4l2_ioctl_ops</span><span class="arrow">→</span>
+    <span class="node">v4l2_m2m helper</span><span class="arrow">→</span>
+    <span class="node">vb2_ops / m2m_ops</span><span class="arrow">→</span>
+    <span class="node">hardware job</span>
+  </div>
+  <p>这不是精确 call graph，而是阅读源码时最有用的地图。大部分 mem2mem decoder 都把通用 buffer 逻辑交给 <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-mem2mem.html">V4L2 mem2mem framework</a> 和 <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-videobuf2.html">videobuf2</a>，驱动只实现硬件相关的格式、queue、启动、完成逻辑。</p>
+</section>
+
+<section>
+  <h2>2. ioctl 到驱动：先看这张表</h2>
+  <table>
+    <tr><th>用户态动作</th><th>常见 ioctl_ops 入口</th><th>最终关注点</th></tr>
+    <tr><td>设置 coded/raw format</td><td><code>vidioc_s_fmt_vid_out_mplane</code><br><code>vidioc_s_fmt_vid_cap_mplane</code></td><td>驱动如何保存 OUTPUT/CAPTURE format；OUTPUT 是否会重置 CAPTURE</td></tr>
+    <tr><td>分配 buffer</td><td><code>v4l2_m2m_ioctl_reqbufs</code> 或 wrapper</td><td><code>vb2_ops.queue_setup</code> 计算 plane 数量和大小</td></tr>
+    <tr><td>QBUF</td><td><code>v4l2_m2m_ioctl_qbuf</code></td><td><code>vb2_ops.buf_prepare</code> 验证 buffer；<code>buf_queue</code> 放入 ready queue</td></tr>
+    <tr><td>STREAMON</td><td><code>v4l2_m2m_ioctl_streamon</code></td><td><code>vb2_ops.start_streaming</code> 启动队列；m2m 尝试调度 job</td></tr>
+    <tr><td>硬件开始处理</td><td>不是直接 ioctl</td><td><code>v4l2_m2m_ops.device_run</code> 写寄存器 / 提交 firmware 命令</td></tr>
+    <tr><td>DQBUF</td><td><code>v4l2_m2m_ioctl_dqbuf</code></td><td>中断或 workqueue 调用 <code>vb2_buffer_done</code> 后，用户才能 DQBUF</td></tr>
+    <tr><td>STREAMOFF</td><td><code>v4l2_m2m_ioctl_streamoff</code></td><td><code>vb2_ops.stop_streaming</code> 停硬件并归还所有 buffer</td></tr>
+  </table>
+  <div class="warn-box">不要从 <code>DQBUF</code> 开始读驱动。真正的完成点通常在中断 handler、firmware callback 或 workqueue 里，那里会调用 <code>vb2_buffer_done()</code>、<code>v4l2_m2m_buf_done_and_job_finish()</code> 或 <code>v4l2_m2m_job_finish()</code>。</div>
+</section>
+
+<section>
+  <h2>3. 一次 decode job 的典型路径</h2>
+  <pre><code>userspace:
+  QBUF(OUTPUT bitstream)
+  QBUF(CAPTURE empty frame buffer)
+  STREAMON(OUTPUT)
+  STREAMON(CAPTURE)
+
+driver / framework:
+  ioctl_ops.qbuf
+    -> v4l2_m2m_qbuf()
+      -> vb2_core_qbuf()
+        -> vb2_ops.buf_prepare()
+        -> vb2_ops.buf_queue()
+          -> v4l2_m2m_buf_queue()
+          -> v4l2_m2m_try_schedule()
+
+  if OUTPUT ready && CAPTURE ready && streaming on:
+    -> v4l2_m2m_ops.device_run(ctx)
+       driver programs hardware
+
+  interrupt / completion:
+    driver marks src/dst buffers DONE
+    -> v4l2_m2m_buf_done_and_job_finish(...)
+       or vb2_buffer_done(...) + v4l2_m2m_job_finish(...)
+
+userspace:
+  DQBUF(OUTPUT)   // input buffer returned
+  DQBUF(CAPTURE)  // decoded frame returned</code></pre>
+  <p><code>v4l2_m2m_try_schedule()</code> 的基础条件来自内核文档：至少一个 source buffer、至少一个 destination buffer、streaming 已开启。driver 还可以通过 <code>job_ready</code> 加额外条件。</p>
+</section>
+
+<section>
+  <h2>4. 读一个驱动时的 6 个搜索词</h2>
+  <table>
+    <tr><th>搜索词</th><th>你要确认什么</th></tr>
+    <tr><td><code>struct v4l2_ioctl_ops</code></td><td>用户态 ioctl 入口。格式设置、buffer 操作、decoder_cmd 是否直接用 m2m helper。</td></tr>
+    <tr><td><code>struct vb2_ops</code></td><td>buffer 生命周期。重点看 <code>queue_setup</code>、<code>buf_prepare</code>、<code>start_streaming</code>、<code>stop_streaming</code>、<code>buf_queue</code>。</td></tr>
+    <tr><td><code>struct v4l2_m2m_ops</code></td><td>调度入口。重点看 <code>device_run</code> 和 <code>job_ready</code>。</td></tr>
+    <tr><td><code>v4l2_m2m_ctx_init</code></td><td>open() 时如何创建 per-filehandle decode context，以及 queue_init 在哪里。</td></tr>
+    <tr><td><code>v4l2_m2m_buf_done</code></td><td>硬件完成后在哪里归还 OUTPUT/CAPTURE buffer。</td></tr>
+    <tr><td><code>V4L2_BUF_FLAG_LAST</code></td><td>drain/DRC/seek 时最后一个 CAPTURE buffer 如何标记。</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>5. 小练习：看到代码先归类</h2>
+  <p>想象你在驱动里看到这段代码：</p>
+  <pre><code>static const struct v4l2_m2m_ops foo_m2m_ops = {
+    .device_run = foo_device_run,
+    .job_ready  = foo_job_ready,
+    .job_abort  = foo_job_abort,
+};</code></pre>
+  <p>你的第一反应应该是：<code>foo_device_run()</code> 是一次硬件 transaction 的入口。它通常会取出当前 OUTPUT/CAPTURE buffer，写寄存器或提交 firmware，然后立即返回；真正完成在中断或异步回调里。</p>
+</section>
+
+<hr>
+
+<section>
+  <h2>6. 小测验</h2>
+  <div class="quiz" id="quiz1">
+    <p class="quiz-q">1. 用户态 QBUF 后，哪个 vb2 回调通常把 buffer 放入驱动 ready queue？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">queue_setup</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">start_streaming</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz1')">buf_queue</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz1')">stop_streaming</div>
+    <div class="feedback"></div>
+  </div>
+  <div class="quiz" id="quiz2">
+    <p class="quiz-q">2. 一次 mem2mem job 真正开始执行时，最应该追哪个回调？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">vidioc_querycap</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz2')">device_run</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">queue_setup</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz2')">buf_finish</div>
+    <div class="feedback"></div>
+  </div>
+  <div class="quiz" id="quiz3">
+    <p class="quiz-q">3. DQBUF 能返回 CAPTURE buffer 的前提通常是什么？</p>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">用户调用过 ENUM_FMT</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">CAPTURE 格式是 NV12</div>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz3')">驱动已标记 buffer DONE</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz3')">OUTPUT 已经 STREAMOFF</div>
+    <div class="feedback"></div>
+  </div>
+  <div class="quiz" id="quiz4">
+    <p class="quiz-q">4. 阅读驱动时，哪个结构最能告诉你用户态 ioctl 入口？</p>
+    <div class="option" data-answer="correct" onclick="checkAnswer(this,'quiz4')">v4l2_ioctl_ops</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">v4l2_fmtdesc</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">vb2_plane</div>
+    <div class="option" data-answer="wrong" onclick="checkAnswer(this,'quiz4')">media_entity</div>
+    <div class="feedback"></div>
+  </div>
+</section>
+
+<hr>
+
+<section class="next-steps">
+  <h3>回顾与下一步</h3>
+  <ul>
+    <li>打印或收藏 <a href="../reference/v4l2-m2m-vb2-callbacks.html">m2m/vb2 回调速查表</a>。</li>
+    <li>下一节适合选一个真实驱动（例如 <code>vicodec</code>、<code>hantro</code>、<code>cedrus</code>）按这 6 个搜索词走一遍。</li>
+    <li>如果你手头有工作中的 decoder 驱动文件名，可以发给我，我们直接按本课方法带读。</li>
+  </ul>
+  <h3 style="margin-top:1rem;">有问题？</h3>
+  <p>如果某个回调名、buffer 状态或调度路径不清楚，直接问我。把源码片段贴出来也可以，我们一起定位它属于哪一层。</p>
+</section>
+
+<footer>
+  Lesson 5 of the V4L2 Learning Track — Primary sources:
+  <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-mem2mem.html">V4L2 mem2mem framework</a> ·
+  <a href="https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-videobuf2.html">videobuf2 framework</a> ·
+  <a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-decoder.html">Stateful Decoder Interface</a>
+</footer>
+</div>
+
+<script>
+function checkAnswer(el, quizId) {
+  var quiz = document.getElementById(quizId);
+  var options = quiz.querySelectorAll('.option');
+  var feedback = quiz.querySelector('.feedback');
+  var isCorrect = el.getAttribute('data-answer') === 'correct';
+  options.forEach(function(opt) {
+    opt.onclick = null;
+    opt.style.cursor = 'default';
+    if (opt === el) { opt.classList.add(isCorrect ? 'correct' : 'wrong'); opt.classList.add('selected'); }
+    else if (opt.getAttribute('data-answer') === 'correct') { opt.classList.add('correct'); }
+  });
+  feedback.classList.add('show');
+  feedback.classList.add(isCorrect ? 'correct' : 'wrong');
+  feedback.textContent = isCorrect ? '正确。' : '再想想。回到上面的路径表看对应层级。';
+}
+</script>
+</body>
+</html>

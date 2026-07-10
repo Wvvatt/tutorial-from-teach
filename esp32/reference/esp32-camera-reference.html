@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 + OV2640 速查</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#586575; --line:#d9e0e7; --accent:#0b6e69; --paper:#fbfcfd; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:880px; margin:0 auto; padding:48px 24px 72px; } h1,h2 { line-height:1.2; } h1 { font-size:clamp(2rem,5vw,3.4rem); margin:0 0 12px; } h2 { margin-top:42px; border-top:1px solid var(--line); padding-top:18px; }
+    .lead { color:var(--muted); max-width:60ch; } code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; } code { color:var(--accent); } pre { overflow:auto; background:#f0f4f7; border-left:3px solid var(--accent); padding:16px; }
+    table { width:100%; border-collapse:collapse; margin:18px 0; } th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; } th { color:var(--muted); font-weight:600; }
+    a { color:var(--accent); } .warning { border:1px solid #e4c98a; background:#fff9e8; padding:14px 16px; }
+    @media print { body { background:white; } main { max-width:none; padding:0; } a { color:inherit; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="../MISSION.md">返回使命</a> · <a href="../CURRICULUM.md">课程路线</a></p>
+  <h1>ESP32 + OV2640 速查</h1>
+  <p class="lead">这张表只保留课程中反复会用到的概念。先记住数据流，再记 API 名称：摄像头产生一帧 JPEG，ESP32 拿到帧缓冲，网络层负责把字节交给浏览器或 server。</p>
+  <h2>一帧照片的生命周期</h2>
+  <pre>esp_camera_init(config)
+        ↓
+esp_camera_fb_get()  →  camera_fb_t { buf, len, width, height, format }
+        ↓
+HTTP response / HTTP POST
+        ↓
+esp_camera_fb_return(fb)</pre>
+  <p>拿到帧后必须归还帧缓冲；否则下一次抓拍可能因为缓冲耗尽失败。JPEG 是网络传输的起点，RGB565 更适合像素处理但通常占用更多内存。</p>
+  <h2>OV2640 与板型</h2>
+  <table><tr><th>概念</th><th>课程中的含义</th></tr>
+    <tr><td>传感器型号</td><td>OV2640 是 2 MP 彩色摄像头，支持 JPEG 等输出格式。</td></tr>
+    <tr><td>板型引脚</td><td>ESP32 的 D0-D7、XCLK、PCLK、VSYNC、HREF、SCCB 和电源控制脚由开发板布线决定，不能只凭传感器型号猜。</td></tr>
+    <tr><td>PSRAM</td><td>高分辨率或多帧缓冲通常需要 PSRAM；初始化前用 <code>psramFound()</code> 判断并降低配置作为 fallback。</td></tr>
+    <tr><td>帧尺寸</td><td>先用 QVGA/VGA 验证链路，再提高到 UXGA；先保证稳定，再追求画质。</td></tr>
+  </table>
+  <h2>最小配置骨架</h2>
+  <pre><code>camera_config_t config{};
+config.pixel_format = PIXFORMAT_JPEG;
+config.frame_size = FRAMESIZE_QVGA;
+config.jpeg_quality = 12;
+config.fb_count = psramFound() ? 2 : 1;
+config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
+esp_err_t err = esp_camera_init(&amp;config);</code></pre>
+  <div class="warning"><strong>先查板型：</strong>上面的骨架没有包含 GPIO 引脚，因为引脚必须来自你的开发板资料或官方示例的对应板型配置。</div>
+  <h2>可信资料</h2>
+  <p><a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">官方 CameraWebServer 示例</a> · <a href="https://github.com/espressif/esp32-camera">官方 esp32-camera 驱动</a> · <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html">官方 Wi‑Fi API</a></p>
+</main></body></html>

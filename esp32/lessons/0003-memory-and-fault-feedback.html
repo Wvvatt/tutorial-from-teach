@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 3 课：读懂内存和故障反馈</title>
+  <style>
+    :root { --ink:#19232d; --muted:#586575; --line:#dbe2e8; --accent:#126b66; --soft:#eef6f5; --warn:#fff7df; --code:#f1f4f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#fcfdfd; font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:860px; margin:auto; padding:42px 22px 72px; }
+    h1,h2 { line-height:1.2; letter-spacing:0; }
+    h1 { font-size:2.45rem; margin:0 0 10px; }
+    h2 { margin-top:40px; border-top:1px solid var(--line); padding-top:18px; }
+    .meta,.muted { color:var(--muted); }
+    .goal { background:var(--soft); border-left:4px solid var(--accent); padding:14px 16px; }
+    .note { background:var(--warn); padding:13px 15px; }
+    pre { overflow:auto; background:var(--code); padding:14px 16px; border-radius:4px; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    a { color:var(--accent); }
+    input { width:100%; padding:10px; border:1px solid #b9c5ce; border-radius:3px; font:inherit; }
+    button { margin-top:10px; padding:9px 13px; color:white; background:var(--accent); border:0; border-radius:3px; font:inherit; cursor:pointer; }
+    #feedback { min-height:1.6em; font-weight:600; }
+    table { width:100%; border-collapse:collapse; margin:10px 0 0; }
+    th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); }
+    @media print { body { background:white; } main { max-width:none; padding:0; } button,input { display:none; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="0002-serial-input-and-time.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/memory-and-fault-feedback.html">本课速查</a></p>
+  <h1>读懂内存和故障反馈</h1>
+  <p class="meta">第 3 课 · 预计 25 分钟 · 真实设备实践</p>
+  <div class="goal"><strong>本课成果：</strong>你能在串口里看到当前可用堆内存，知道这串数字代表什么，并能通过一次受控失败判断程序是“没起来、卡住了、还是在重启”。这会直接服务后面的 Wi-Fi 和摄像头课。</div>
+
+  <h2>1. 先回答记忆题</h2>
+  <p><code>Free heap: 351468 bytes</code> 里的 <code>heap</code> 是什么？先用一句话说出它代表的资源，再说出为什么我们要关心它。</p>
+
+  <h2>2. 打印一条内存基线</h2>
+  <p>打开 <code>esp32-test/src/main.cpp</code>，在 <code>setup()</code> 里、<code>Serial.begin()</code> 之后加上这一行：</p>
+  <pre><code>Serial.printf("Free heap: %lu bytes\n",
+              static_cast&lt;unsigned long&gt;(ESP.getFreeHeap()));</code></pre>
+  <p>如果你已经有心跳输出，这条信息应该在启动后很快出现。它给你一个“程序刚启动时可用 RAM 还剩多少”的起点。</p>
+
+  <h2>3. 做一次受控失败</h2>
+  <p>在 <code>setup()</code> 末尾加一段只做一次的探测，不要放进 <code>loop()</code>：</p>
+  <pre><code>constexpr size_t kProbeBytes = 1024 * 1024;
+void* probe = malloc(kProbeBytes);
+if (probe == nullptr) {
+  Serial.printf("malloc(%lu) failed as expected\n",
+                static_cast&lt;unsigned long&gt;(kProbeBytes));
+} else {
+  Serial.printf("malloc(%lu) unexpectedly succeeded\n",
+                static_cast&lt;unsigned long&gt;(kProbeBytes));
+  free(probe);
+}</code></pre>
+  <div class="note"><strong>为什么这样做：</strong>你不是在破坏程序，而是在确认“内存不足”会以什么形态出现在日志里。后面抓摄像头帧或开网络时，这类证据比猜测更重要。</div>
+
+  <h2>4. 学会区分三种输出</h2>
+  <table>
+    <tr><th>现象</th><th>常见含义</th><th>下一步看什么</th></tr>
+    <tr><td>只有监视器横幅，没有程序输出</td><td>程序没真正跑起来，或串口参数不对</td><td><code>EN/RESET</code>、<code>baud</code>、<code>rts/dtr</code></td></tr>
+    <tr><td>启动后正常打印，但随后停住</td><td>卡在某个阻塞调用或死循环里</td><td>最近改过的函数、<code>delay</code>、等待条件</td></tr>
+    <tr><td>反复出现启动信息，然后又重来一次</td><td>崩溃后在重启，可能是异常或内存问题</td><td>复位原因、最后一条日志、是否有栈回溯</td></tr>
+  </table>
+
+  <h2>5. 编译、烧录、验证</h2>
+  <pre><code>cd /home/teng.wang/Code/Teach/esp32/esp32-test
+pio run -t upload
+pio device monitor</code></pre>
+  <p>启动后，你应该至少看到两类证据：一条 <code>Free heap</code> 记录，和一条 <code>malloc</code> 的成功或失败记录。把这两条和当前心跳输出放在一起看，不要只看单独一行。</p>
+
+  <h2>6. 小挑战</h2>
+  <p>把内存打印再放一次到 <code>loop()</code> 中，但只在程序启动后前 3 次心跳里打印。目的不是刷屏，而是观察“启动时”和“运行一会儿后”数值有没有变化。先想清楚需要哪一个计数状态，再动手改。</p>
+
+  <h2>7. 回忆检查</h2>
+  <p>如果串口里反复出现启动信息，你更应该先怀疑“程序在重启”，还是“串口读错了”？请说出你的判断依据，至少包含一条日志证据。</p>
+  <input id="answer" placeholder="用自己的话回答">
+  <button id="check">检查答案</button>
+  <p id="feedback" aria-live="polite"></p>
+
+  <h2>通过标准</h2>
+  <p>你能解释 <code>Free heap</code> 的含义，知道 <code>ESP.getFreeHeap()</code> 返回的是字节数，并能从日志里区分“正常运行”“阻塞”“重启”和“内存不足”的大致形态。</p>
+
+  <p class="muted">遇到异常时，把启动日志、最后一条输出和你改过的代码片段一起发来。内存问题靠证据判断，不靠感觉。</p>
+  <p><strong>主资料：</strong><a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html">Arduino-ESP32 Serial API</a>。实现细节可对照当前框架源码中的 <code>ESP.getFreeHeap()</code>。</p>
+
+  <script>
+    const input = document.querySelector('#answer');
+    document.querySelector('#check').addEventListener('click', () => {
+      const text = input.value.trim().toLowerCase();
+      const out = document.querySelector('#feedback');
+      if (!text.includes('heap') || !text.includes('byte')) {
+        out.textContent = '再具体一点：要说出它是“可用堆内存”，并提到单位是 bytes。';
+        return;
+      }
+      if (!text.includes('重启') && !text.includes('restart') && !text.includes('reboot')) {
+        out.textContent = '再补一层判断：你要能说明为什么“反复启动日志”更像重启而不是串口误读。';
+        return;
+      }
+      out.textContent = '关键词到位。下一步用一次受控失败验证你的判断，而不是停在定义上。';
+    });
+  </script>
+</main></body>
+</html>

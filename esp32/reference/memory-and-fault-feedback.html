@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 内存与故障反馈速查</title>
+  <style>
+    :root { --ink:#18222c; --muted:#586575; --line:#d8e0e6; --accent:#176b62; --paper:#fcfdfd; --code:#f1f5f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:880px; margin:auto; padding:44px 24px 72px; }
+    h1,h2 { line-height:1.2; letter-spacing:0; }
+    h1 { margin:0 0 12px; font-size:2.35rem; }
+    h2 { margin-top:38px; padding-top:16px; border-top:1px solid var(--line); }
+    p.lead { max-width:64ch; color:var(--muted); }
+    pre { overflow:auto; padding:16px; background:var(--code); border-left:3px solid var(--accent); }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); }
+    a { color:var(--accent); }
+    @media print { main { max-width:none; padding:0; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="../lessons/0003-memory-and-fault-feedback.html">第 3 课</a> · <a href="../reference/nonblocking-loop.html">非阻塞 loop</a></p>
+  <h1>内存与故障反馈速查</h1>
+  <p class="lead">ESP32 的调试不是猜“哪里坏了”，而是读懂三类证据：当前还剩多少堆内存、程序是否在阻塞、以及它是不是在反复重启。</p>
+
+  <h2>常用打印</h2>
+  <pre><code>Serial.printf("Free heap: %lu bytes\n",
+              static_cast&lt;unsigned long&gt;(ESP.getFreeHeap()));</code></pre>
+  <pre><code>void* probe = malloc(1024 * 1024);
+if (probe == nullptr) {
+  Serial.println("malloc failed");
+}</code></pre>
+
+  <h2>三种信号</h2>
+  <table>
+    <tr><th>信号</th><th>通常说明</th><th>该看什么</th></tr>
+    <tr><td>持续心跳 + heap 数字</td><td>程序还在跑</td><td>数值是否下降、是否有任务堆积</td></tr>
+    <tr><td>输出停住</td><td>卡在阻塞调用</td><td><code>delay</code>、等待 IO、死循环</td></tr>
+    <tr><td>启动日志重复出现</td><td>崩溃后重启</td><td>最后一条日志、复位原因、异常回溯</td></tr>
+  </table>
+
+  <h2>三个判断</h2>
+  <p>看字节数，不看感觉；看日志序列，不看单行；先分清“阻塞”和“重启”，再去查 Wi-Fi、摄像头或上传代码。</p>
+  <p>官方参考：<a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html">ESP32 Serial API</a>。</p>
+</main></body>
+</html>

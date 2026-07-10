@@ -17,6 +17,12 @@
 - [v4l-utils 项目 (GitHub)](https://github.com/linuxtv/v4l-utils)
   V4L2 用户空间工具集（v4l2-ctl, v4l2-compliance 等）源码。用於：参考实现、调试工具用法。
 
+- [V4L2 Memory-to-Memory Driver API](https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-mem2mem.html)
+  V4L2 mem2mem framework 的驱动侧 API。用於：理解 decoder 驱动如何调度 OUTPUT/CAPTURE buffer、`device_run`、`job_ready`、drain 相关 helper。
+
+- [V4L2 videobuf2 Driver API](https://www.kernel.org/doc/html/latest/driver-api/media/v4l2-videobuf2.html)
+  videobuf2 buffer 队列框架文档。用於：理解 `REQBUFS/QBUF/STREAMON/DQBUF` 如何映射到 `queue_setup`、`buf_prepare`、`buf_queue`、`start_streaming`、`stop_streaming`。
+
 - [V4L2 API 详解 — linuxtv.org wiki](https://linuxtv.org/downloads/v4l-dvb-apis-new/userspace-api/v4l/v4l2.html)
   另一个入口访问 V4L2 规格。
 

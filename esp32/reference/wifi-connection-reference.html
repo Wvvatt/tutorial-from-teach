@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wi-Fi 连接速查 · ESP32</title>
+  <style>
+    :root { --ink:#19232d; --muted:#586575; --line:#dbe2e8; --accent:#126b66; --soft:#eef6f5; --code:#f1f4f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#fcfdfd; font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:860px; margin:auto; padding:36px 22px 64px; }
+    h1 { font-size:1.9rem; margin:0 0 6px; }
+    h2 { margin-top:30px; border-top:1px solid var(--line); padding-top:14px; font-size:1.2rem; }
+    th,td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre { overflow:auto; background:var(--code); padding:11px 13px; border-radius:4px; }
+    .src { color:var(--muted); font-size:0.85rem; }
+    @media print { body { background:white; } main { max-width:none; padding:0; } }
+  </style>
+</head>
+<body><main>
+  <h1>Wi-Fi 连接速查</h1>
+  <p class="src">对应 <a href="../lessons/0004-wifi-connection-state-machine.html">第 4 课</a>。API 来自已安装的 arduino-esp32 <code>WiFiSTA.h</code> / <code>WiFiType.h</code>。
+
+  <h2>wl_status_t 枚举</h2>
+  <p><span class="src">来源：<code>libraries/WiFi/src/WiFiType.h</code></span></p>
+  <table>
+    <tr><th>值</th><th>名称</th><th>含义</th></tr>
+    <tr><td>255</td><td>WL_NO_SHIELD</td><td>Wi-Fi 还没启动/不可用（兼容旧库）</td></tr>
+    <tr><td>0</td><td>WL_IDLE_STATUS</td><td>空闲，正在切换状态</td></tr>
+    <tr><td>1</td><td>WL_NO_SSID_AVAIL</td><td>找不到该 SSID</td></tr>
+    <tr><td>2</td><td>WL_SCAN_COMPLETED</td><td>扫描完成</td></tr>
+    <tr><td>3</td><td>WL_CONNECTED</td><td>已连接并拿到 IP（唯一“成功”）</td></tr>
+    <tr><td>4</td><td>WL_CONNECT_FAILED</td><td>连接失败（密码错等）</td></tr>
+    <tr><td>5</td><td>WL_CONNECTION_LOST</td><td>连上后断开</td></tr>
+    <tr><td>6</td><td>WL_DISCONNECTED</td><td>已断开</td></tr>
+  </table>
+
+  <h2>核心调用</h2>
+  <pre><code>WiFi.mode(WIFI_STA);          // 站点模式（必须在 begin 前）
+WiFi.setAutoReconnect(true);  // 断线时由驱动自动重连
+WiFi.begin(ssid, password);   // 发起连接（非阻塞，立即返回）
+
+WiFi.status();                // 返回 wl_status_t，必须轮询
+WiFi.localIP();               // IPAddress，仅 status==WL_CONNECTED 时有意义
+WiFi.RSSI();                  // int8_t，信号强度，正值不可能
+WiFi.reconnect();             // 手动强制重连（配合命令调试）</code></pre>
+
+  <h2>非阻塞轮询模式（替换官方的 while+delay）</h2>
+  <pre><code>uint32_t lastCheck = 0;
+wl_status_t last = WL_NO_SHIELD;
+
+void wifiLoop() {
+  if (millis() - lastCheck < 500) return;
+  lastCheck = millis();
+  wl_status_t s = WiFi.status();
+  if (s != last) {
+    Serial.printf("wifi: %s -> %s\n", name(last), name(s));
+    last = s;
+  }
+}</code></pre>
+  <p>不要用 <code>while (WiFi.status() != WL_CONNECTED) { delay(500); }</code>：它会冻结 <code>loop()</code>，与后续 HTTP 服务和抓帧任务冲突。
+
+  <h2>诊断口诀</h2>
+  <table>
+    <tr><th>串口现象</th><th>先查</th></tr>
+    <tr><td>一直停在 IDLE / DISCONNECTED</td><td>SSID 拼写、5GHz vs 2.4GHz、密码</td></tr>
+    <tr><td>NO_SSID_AVAIL</td><td>路由器是否在 2.4GHz、信号是否够强</td></tr>
+    <tr><td>CONNECT_FAILED 反复</td><td>密码、认证类型（WPA2/WPA3）</td></tr>
+    <tr><td>连上后 CONNECTION_LOST 反复</td><td>电源、距离、AP 漫游</td></tr>
+  </table>
+
+  <p class="src">主资料：<a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html">Arduino-ESP32 WiFi API</a>。枚举以本机安装版本 <code>WiFiType.h</code> 为准。</p>
+</main></body>
+</html>

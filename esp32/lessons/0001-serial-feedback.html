@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 1 课：让设备反馈成为调试工具</title>
+  <style>
+    :root { --ink:#19232d; --muted:#586575; --line:#dbe2e8; --accent:#126b66; --soft:#eef6f5; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:#fcfdfd; font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:850px; margin:auto; padding:42px 22px 70px; } h1,h2 { line-height:1.2; } h1 { font-size:clamp(2rem,5vw,3.2rem); margin:0 0 10px; } h2 { margin-top:40px; border-top:1px solid var(--line); padding-top:18px; } .meta,.muted { color:var(--muted); } .goal { background:var(--soft); border-left:4px solid var(--accent); padding:14px 16px; } pre { overflow:auto; background:#f1f4f6; padding:14px 16px; border-radius:4px; } code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; } a { color:var(--accent); } input { width:100%; padding:10px; border:1px solid #b9c5ce; border-radius:3px; font:inherit; } button { margin-top:10px; padding:9px 13px; color:white; background:var(--accent); border:0; border-radius:3px; font:inherit; cursor:pointer; } #feedback { min-height:1.6em; font-weight:600; }
+    @media print { body { background:white; } main { max-width:none; padding:0; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="../MISSION.md">使命</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/esp32-camera-reference.html">摄像头速查</a></p>
+  <h1>让设备反馈成为调试工具</h1>
+  <p class="meta">第 1 课 · 预计 20 分钟 · 真实设备实践</p>
+  <div class="goal"><strong>本课目标：</strong>你将把一次“程序运行了”变成三条证据：串口心跳、GPIO2 状态和可重复的编译/烧录命令。这是之后判断 Wi‑Fi 或摄像头问题的基线。</div>
+  <h2>1. 先观察，不改代码</h2>
+  <p>在终端执行：</p>
+  <pre>cd /home/teng.wang/Code/Teach/esp32/esp32-test
+pio run
+pio device monitor</pre>
+  <p>如果监视器只显示横幅，按一下板上的 <code>EN/RESET</code>。你应该看到 <code>heartbeat</code> 每秒递增，<code>gpio2</code> 在 HIGH/LOW 之间交替。</p>
+  <h2>2. 做一个最小改动</h2>
+  <p>打开 <code>src/main.cpp</code>，把：</p>
+  <pre>constexpr uint32_t kIntervalMs = 1000;</pre>
+  <p>改成：</p>
+  <pre>constexpr uint32_t kIntervalMs = 2500;</pre>
+  <p>然后执行：</p>
+  <pre>pio run -t upload</pre>
+  <p>重新打开监视器，验证两次心跳约相隔 2.5 秒。不要凭“烧录命令成功”判断程序更新；用输出时间间隔证明它真的运行了新版本。</p>
+  <h2>3. 回忆检查</h2>
+  <p>不要查资料，先写下：为什么这次只改应用代码就能工作，而课程后面的摄像头实验通常需要同时关心分区、PSRAM 和 GPIO 引脚？</p>
+  <input id="answer" placeholder="用自己的话回答">
+  <button id="check">提交回忆</button>
+  <p id="feedback" aria-live="polite"></p>
+  <h2>4. 通过标准</h2>
+  <p>你完成了本课，当你能把“编译失败、烧录失败、程序启动但逻辑不对”三种情况分别指出证据来源，并把心跳间隔改成 2.5 秒后在串口中验证。</p>
+  <h2>下一步</h2>
+  <p>下一课会加入输入和定时器：用串口命令改变闪烁周期，同时保持串口心跳。这会让你理解为什么摄像头采集和网络上传不能用一串长时间阻塞的 <code>delay</code>。</p>
+  <p class="muted">遇到任何不确定的现象，把命令、完整日志和你预期的结果发给老师；我们会用证据逐步缩小原因。</p>
+  <p><strong>主资料：</strong><a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">Espressif 官方 CameraWebServer 示例</a>。它会在摄像头课再次使用。</p>
+  <script>
+    const input = document.querySelector('#answer');
+    document.querySelector('#check').addEventListener('click', () => {
+      const text = input.value.trim();
+      const out = document.querySelector('#feedback');
+      if (text.length < 18) out.textContent = '再具体一点：提到“代码位置、烧录地址或运行日志”中的至少两项。';
+      else out.textContent = '记录你的答案。下次课程开始时先不看资料复述一次。';
+    });
+  </script>
+</main></body></html>

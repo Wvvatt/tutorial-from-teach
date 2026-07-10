@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 非阻塞 loop 速查</title>
+  <style>
+    :root { --ink:#18222c; --muted:#586575; --line:#d8e0e6; --accent:#176b62; --paper:#fcfdfd; --code:#f1f5f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:880px; margin:auto; padding:44px 24px 72px; }
+    h1,h2 { line-height:1.2; letter-spacing:0; }
+    h1 { margin:0 0 12px; font-size:2.35rem; }
+    h2 { margin-top:38px; padding-top:16px; border-top:1px solid var(--line); }
+    p.lead { max-width:64ch; color:var(--muted); }
+    pre { overflow:auto; padding:16px; background:var(--code); border-left:3px solid var(--accent); }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); }
+    a { color:var(--accent); }
+    @media print { main { max-width:none; padding:0; } }
+  </style>
+</head>
+<body><main>
+  <p><a href="../lessons/0002-serial-input-and-time.html">第 2 课</a> · <a href="../reference/esp32-camera-reference.html">摄像头速查</a></p>
+  <h1>非阻塞 <code>loop()</code> 速查</h1>
+  <p class="lead">一个好的主循环每次只做一点工作，然后尽快返回。串口、Wi-Fi、摄像头和上传任务才能轮流获得处理机会。</p>
+
+  <h2>周期任务</h2>
+  <pre><code>uint32_t lastRunMs = 0;
+uint32_t intervalMs = 1000;
+
+void loop() {
+  const uint32_t now = millis();
+  if (now - lastRunMs &gt;= intervalMs) {
+    lastRunMs = now;
+    runPeriodicTask();
+  }
+
+  handleInput();
+}</code></pre>
+
+  <h2>串口输入</h2>
+  <pre><code>void handleInput() {
+  while (Serial.available() &gt; 0) {
+    const char command = static_cast&lt;char&gt;(Serial.read());
+    handleCommand(command);
+  }
+}</code></pre>
+
+  <h2>判断表</h2>
+  <table>
+    <tr><th>写法</th><th>影响</th><th>适用场景</th></tr>
+    <tr><td><code>delay(2000)</code></td><td>当前任务停住约 2 秒</td><td>短暂启动等待、一次性小实验</td></tr>
+    <tr><td><code>millis()</code> 比较</td><td>等待期间仍能处理其他任务</td><td>心跳、重连、拍照、周期上传</td></tr>
+    <tr><td><code>while (available())</code></td><td>清空已经到达的输入字节</td><td>命令、传感器报文、串口协议</td></tr>
+  </table>
+
+  <h2>三个规则</h2>
+  <p>状态放在循环外；到时间才执行周期任务；没有工作时尽快把控制权交回系统。</p>
+  <p>官方参考：<a href="https://docs.arduino.cc/language-reference/en/functions/time/millis/">millis()</a> · <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html">ESP32 Serial API</a></p>
+</main></body>
+</html>
