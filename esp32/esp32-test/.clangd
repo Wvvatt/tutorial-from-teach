@@ -1,5 +1,8 @@
 CompileFlags:
   Compiler: clang++
+  Add:
+    - "-Dsection(x)="
+    - "-D__block=esp_block"
   Remove:
     - -mlongcalls
     - -fstrict-volatile-bitfields

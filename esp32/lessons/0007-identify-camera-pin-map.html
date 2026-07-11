@@ -1,0 +1,52 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 7 课：识别摄像头板型与引脚</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:860px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0006-device-server-protocol.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/ov2640-signal-map.html">信号速查</a></p>
+<h1>先确认摄像头是谁，再写代码</h1><p class="muted">第 7 课 · 阶段三入口 · 预计 20 分钟 · 不烧录摄像头代码</p>
+<div class="goal"><strong>本课成果：</strong>形成一份有证据来源的“摄像头信号 → ESP32 GPIO”表，并明确哪些格子仍未知。下一课只有在这张表可信后才调用 <code>esp_camera_init()</code>。</div>
+
+<h2>1. 已知与未知</h2><table><tr><th>已知</th><th>未知</th></tr><tr><td>芯片是经典 ESP32-D0WDQ6</td><td>开发板商品/丝印型号</td></tr><tr><td>摄像头传感器是 OV2640</td><td>是否为 AI Thinker 或其他布局</td></tr><tr><td>4 MB Flash</td><td>是否有 PSRAM、容量多少</td></tr><tr><td>Wi-Fi 和串口正常</td><td>D0–D7、XCLK、PCLK 等 GPIO 映射</td></tr></table>
+<div class="warn"><strong>本课规则：</strong>外形相似不是引脚证据。不要先定义 <code>CAMERA_MODEL_AI_THINKER</code> “试试看”。</div>
+
+<h2>2. 拍四张证据照片</h2><ol><li>开发板正面全景，文字清晰。</li><li>开发板背面全景，文字清晰。</li><li>ESP32 金属屏蔽罩和附近丝印特写。</li><li>OV2640 排线、插座和排线触点方向特写。</li></ol><p>不要带电插拔排线。先拔掉 USB，再操作摄像头连接器。把照片发给我，我们会按丝印和布局查对应的官方/厂商资料。</p>
+
+<h2>3. 读取芯片能力，不猜板型</h2><p>在现有启动信息中加入两行：</p><pre><code>Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
+Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());</code></pre><p>编译烧录后记录结果。<code>0</code> 表示当前没有可用 PSRAM，但仍不能单凭它识别板型。它只决定下一课能选多大的帧缓冲。</p>
+
+<h2>4. 学会读引脚表</h2><p>摄像头不是“一根数据线”。它同时使用配置、时钟和 8 位像素总线：</p><pre><code>配置：SIOD, SIOC
+时钟：XCLK, PCLK
+边界：VSYNC, HREF
+数据：D0 ... D7
+控制：PWDN, RESET</code></pre><p>注意官方 Arduino 驱动把 D0–D7 常写作 <code>pin_d0 ... pin_d7</code>，而板型表常用 <code>Y2_GPIO_NUM ... Y9_GPIO_NUM</code>；两套名称指向同一条 8 位数据总线，编号写法不同。</p>
+
+<h2>5. 建立证据表</h2><p>复制下面表格到你的回复中。未知就写“未知”，不要补猜测：</p><pre><code>板上丝印型号：
+PSRAM size：
+摄像头排线针数：
+资料链接/来源：
+
+PWDN =
+RESET =
+XCLK =
+SIOD =
+SIOC =
+D0/Y2 =
+D1/Y3 =
+D2/Y4 =
+D3/Y5 =
+D4/Y6 =
+D5/Y7 =
+D6/Y8 =
+D7/Y9 =
+VSYNC =
+HREF =
+PCLK =</code></pre>
+
+<h2>6. 和官方配置比对，但不直接采用</h2><p>本机示例位于：</p><pre><code>~/.platformio/packages/framework-arduinoespressif32/
+libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h</code></pre><p>搜索与你板上丝印完全匹配的型号。只有型号、板版本和资料能互相印证时，才把其中一组 GPIO 复制进证据表。官方示例列出多种互不相同的板型，正说明“OV2640”本身不能决定 GPIO。</p>
+
+<h2>7. 回忆检查</h2><p>为什么知道传感器是 OV2640，仍不能直接知道 ESP32 GPIO？请在答案中使用“传感器”“开发板布线”“证据”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>提供四张清晰硬件照片。</li><li>记录 PSRAM size。</li><li>确认开发板型号，或明确记录“仍未知”。</li><li>引脚表每个已填值都有资料来源，而不是外形猜测。</li></ul>
+<p class="muted">把照片、PSRAM 输出和证据表发给我。任何连接器方向不确定时先问，不要带电尝试。下一课将用确认后的映射抓取第一张 JPEG。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">CameraWebServer</a> 板型引脚表；<a href="https://docs.espressif.com/projects/esp-dev-kits/en/latest/_static/esp32-s2-kaluga-1/datasheet/Camera_OV2640.pdf">OV2640 数据手册</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('传感器'))f.textContent='先区分摄像头芯片型号和整块板。';else if(!t.includes('开发板布线'))f.textContent='再说明谁决定信号接到哪个 GPIO。';else if(!t.includes('证据'))f.textContent='最后说明引脚值应该来自哪里。';else f.textContent='边界清楚了。下一步用照片、丝印和资料建立真实引脚表。'};</script>
+</main></body></html>
+

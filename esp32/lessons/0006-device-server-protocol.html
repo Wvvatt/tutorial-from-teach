@@ -1,0 +1,80 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 6 课：设备与服务器的协议边界</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:860px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.gate{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0005-http-health-endpoint.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/http-protocol-boundary.html">本课速查</a></p>
+<h1>让 ESP32 主动汇报一次</h1><p class="muted">第 6 课 · 预计 30 分钟 · JSON POST 闭环</p>
+<div class="goal"><strong>本课成果：</strong>按串口命令 <code>p</code>，ESP32 向 Mac 的 <code>POST /events</code> 发送一条 JSON；Mac 打印请求体并返回 <code>201 Created</code>，ESP32 串口打印这个状态码。这就是以后上传 JPEG 的协议骨架。</div>
+
+<h2>0. 开课门槛</h2><div class="gate">先用 Mac 成功执行一次 <code>curl -i http://ESP32_IP/health</code>。这证明双方同网段且 ESP32 已拿到 IP。</div>
+
+<h2>1. 先分清角色</h2><p>上一课中，浏览器是客户端，ESP32 是服务端。本课角色翻转：ESP32 是客户端，Mac 是服务端。客户端发请求，服务端决定状态码。一次 HTTP 连接中，“客户端/服务端”由谁发起请求决定，不由设备大小决定。</p>
+
+<h2>2. 在 Mac 启动最小接收器</h2><p>新建 <code>server/receiver.py</code>：</p>
+<pre><code>from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != "/events":
+            self.send_error(404)
+            return
+
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        print("event:", body.decode("utf-8"))
+
+        response = b'{"accepted":true}\n'
+        self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()</code></pre>
+<p>运行：</p><pre><code>python3 server/receiver.py</code></pre>
+<p>另开终端先用 Mac 自测协议：</p><pre><code>curl -i -X POST http://127.0.0.1:8000/events \
+  -H 'Content-Type: application/json' \
+  -d '{"uptime_ms":1234}'</code></pre>
+<p>必须先看到 <code>201 Created</code>，再把 ESP32 加入链路。这样出错时知道服务端本身是好的。</p>
+
+<h2>3. 找到 Mac 的局域网 IP</h2><pre><code>ipconfig getifaddr en0</code></pre><p>记下结果，例如 <code>192.168.1.10</code>。不要把 <code>127.0.0.1</code> 写进 ESP32：对 ESP32 来说，那表示 ESP32 自己。</p>
+
+<h2>4. 加一个主动 POST</h2><p>在 include 区加入：</p><pre><code>#include &lt;HTTPClient.h&gt;</code></pre>
+<p>加入函数，把示例 IP 换成你的 Mac IP：</p>
+<pre><code>static void postEvent() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("post: skipped, wifi disconnected");
+        return;
+    }
+
+    HTTPClient http;
+    http.begin("http://192.168.1.10:8000/events");
+    http.addHeader("Content-Type", "application/json");
+
+    String body = "{\"uptime_ms\":" + String(millis())
+                + ",\"free_heap\":" + String(ESP.getFreeHeap()) + "}";
+    const int status = http.POST(body);
+    Serial.printf("post: status=%d body=%s\n", status, body.c_str());
+    http.end();
+}</code></pre>
+<p>在串口命令的 <code>switch</code> 中加入：</p><pre><code>case 'p':
+    postEvent();
+    return;</code></pre>
+
+<h2>5. 运行反馈回路</h2><pre><code>pio run -t upload
+pio device monitor</code></pre><p>按 <code>p</code>。两端应分别看到：</p>
+<pre><code># ESP32
+post: status=201 body={"uptime_ms":...,"free_heap":...}
+
+# Mac receiver
+event: {"uptime_ms":...,"free_heap":...}</code></pre>
+<p>再把路径临时改成 <code>/wrong</code>，预测并验证返回 <code>404</code>。恢复后，把接收器停掉再按 <code>p</code>，观察负数错误码。这三种证据分别表示：协议成功、路径错误、服务器不可达。</p>
+
+<h2>6. 本课的限制</h2><p><code>HTTPClient::POST()</code> 会等待网络结果。本课只允许由按键命令触发，用来学习协议边界。后续定时拍照上传时，我们会加入超时、发送状态和失败策略，不能让它无边界地占用控制权。</p>
+
+<h2>7. 回忆检查</h2><p>为什么 ESP32 不能把 <code>127.0.0.1</code> 当作 Mac？为什么收到 <code>404</code> 时不能把上传记为成功？请在答案中使用“本机”“路径”“状态码”。</p>
+<input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>Mac 自测 POST 返回 201。</li><li>ESP32 按 <code>p</code> 后 Mac 收到同一条 JSON。</li><li>能从 201、404、负数错误码区分三类结果。</li><li>发送期间和发送后能继续看到心跳。</li></ul>
+<p class="muted">把 Mac 收到的 JSON、ESP32 的状态码和一次 404 证据发给我。任何一步不清楚，直接问我，不要同时修改客户端和服务端。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient/examples/BasicHttpClient">HTTPClient 示例</a>；Python 官方 <a href="https://docs.python.org/3/library/http.server.html">http.server 文档</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('本机'))f.textContent='先说明 127.0.0.1 指向谁的本机。';else if(!t.includes('路径'))f.textContent='再解释 404 对请求路径意味着什么。';else if(!t.includes('状态码'))f.textContent='最后说明客户端凭什么判断成功。';else f.textContent='协议边界清楚了。现在用 201、404 和不可达三种真实证据验证。'};</script>
+</main></body></html>
+

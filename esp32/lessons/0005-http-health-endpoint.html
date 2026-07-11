@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 5 课：HTTP 状态接口</title>
+<style>
+:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:860px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.gate{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}
+</style></head><body><main>
+<p><a href="0004-wifi-connection-state-machine.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/http-health-reference.html">本课速查</a></p>
+<h1>让浏览器读取 ESP32</h1>
+<p class="muted">第 5 课 · 预计 25 分钟 · 一个请求闭环</p>
+<div class="goal"><strong>本课成果：</strong>在 Mac 上访问 ESP32 的 <code>/health</code>，得到 uptime、RSSI 和 free heap；访问错误路径时得到 HTTP 404。这个接口将成为摄像头接入前的网络诊断入口。</div>
+
+<h2>0. 开课门槛</h2>
+<div class="gate">先确认串口出现 <code>wifi: CONNECTED ip=...</code>。如果仍显示 <code>403 Forbidden</code> 作为 SSID 或持续 retry，先修正 <code>src/secret.h</code>，否则 Mac 不知道该访问哪个 IP。</div>
+
+<h2>1. 先预测</h2>
+<p>第 4 课中，为什么 <code>wifiLoop()</code> 必须快速返回？把同一个原则迁移过来：如果 <code>server.handleClient()</code> 一直得不到控制权，浏览器的请求会发生什么？先在心里作答，再继续。</p>
+
+<h2>2. 建立 HTTP 服务</h2>
+<p>在 include 区加入：</p>
+<pre><code>#include &lt;WebServer.h&gt;</code></pre>
+<p>在匿名命名空间中创建监听 80 端口的服务：</p>
+<pre><code>WebServer server(80);
+bool httpStarted = false;</code></pre>
+
+<h2>3. 定义 /health 的响应</h2>
+<p>在 <code>wifiBegin()</code> 前加入：</p>
+<pre><code>static void handleHealth() {
+    String body;
+    body.reserve(96);
+    body += "uptime_ms=" + String(millis()) + "\n";
+    body += "rssi=" + String(WiFi.RSSI()) + "\n";
+    body += "free_heap=" + String(ESP.getFreeHeap()) + "\n";
+    server.send(200, "text/plain; charset=utf-8", body);
+}</code></pre>
+<p>这里第一次看见 HTTP 响应的三部分：状态码 <code>200</code>、内容类型、响应体。API 签名可在本机 <code>WebServer.h</code> 的 <code>send()</code> 中核对。</p>
+
+<h2>4. 只在拿到 IP 后启动</h2>
+<p>加入一个短函数：</p>
+<pre><code>static void httpLoop() {
+    if (WiFi.status() != WL_CONNECTED)
+        return;
+
+    if (!httpStarted) {
+        server.on("/health", HTTP_GET, handleHealth);
+        server.onNotFound([] {
+            server.send(404, "text/plain; charset=utf-8", "not found\n");
+        });
+        server.begin();
+        httpStarted = true;
+        Serial.println("http: listening on port 80");
+    }
+
+    server.handleClient();
+}</code></pre>
+<p>在主 <code>loop()</code> 中，放在 <code>wifiLoop()</code> 后面：</p>
+<pre><code>wifiLoop();
+httpLoop();
+heartbeatLoop();</code></pre>
+
+<h2>5. 编译、烧录、测量</h2>
+<pre><code>cd /Users/watt/Code/Teach/esp32/esp32-test
+pio run -t upload
+pio device monitor</code></pre>
+<p>记下串口打印的 IP，例如 <code>192.168.1.42</code>。另开终端：</p>
+<pre><code>curl -i http://192.168.1.42/health
+curl -i http://192.168.1.42/no-such-path</code></pre>
+<p>第一次应为 <code>HTTP/1.1 200 OK</code>，第二次应为 <code>HTTP/1.1 404 Not Found</code>。连续请求两次 <code>/health</code>，确认 <code>uptime_ms</code> 增大、心跳仍继续。</p>
+
+<h2>6. 回忆检查</h2>
+<p><code>server.on()</code>、<code>server.send()</code>、<code>server.handleClient()</code> 分别负责什么？请在答案中使用“路由”“响应”“控制权”。</p>
+<input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2>
+<ul><li><code>/health</code> 返回 200 和三项实时状态。</li><li>未知路径返回 404。</li><li>连续请求时心跳不中断。</li><li>能解释为什么 <code>handleClient()</code> 必须反复获得控制权。</li></ul>
+
+<p class="muted">把两段 <code>curl -i</code> 输出和同期心跳发给老师。哪里不清楚，随时问我；不要靠猜测修改一大段代码。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/WebServer/examples/HelloServer">Arduino-ESP32 HelloServer</a>；本课只抽取其中的请求闭环。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('路由'))f.textContent='先说明 on() 建立了什么映射。';else if(!t.includes('响应'))f.textContent='再说明 send() 交回了什么。';else if(!t.includes('控制权'))f.textContent='最后说明 handleClient() 为什么必须反复运行。';else f.textContent='三段闭环齐了。现在用 200、404 和持续心跳作为设备证据。'};</script>
+</main></body></html>
+

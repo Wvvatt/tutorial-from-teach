@@ -1,2 +1,4 @@
 .pio/
 src/secret.h
+.cache/
+compile_commands.json
