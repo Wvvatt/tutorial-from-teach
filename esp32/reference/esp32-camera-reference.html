@@ -34,6 +34,16 @@ esp_camera_fb_return(fb)</pre>
     <tr><td>PSRAM</td><td>高分辨率或多帧缓冲通常需要 PSRAM；初始化前用 <code>psramFound()</code> 判断并降低配置作为 fallback。</td></tr>
     <tr><td>帧尺寸</td><td>先用 QVGA/VGA 验证链路，再提高到 UXGA；先保证稳定，再追求画质。</td></tr>
   </table>
+  <h2>本机已验证的 AI Thinker 兼容引脚</h2>
+  <table><tr><th>摄像头信号</th><th>ESP32 GPIO</th></tr>
+    <tr><td>PWDN / RESET</td><td>32 / -1（未连接）</td></tr>
+    <tr><td>XCLK / PCLK</td><td>0 / 22</td></tr>
+    <tr><td>VSYNC / HREF</td><td>25 / 23</td></tr>
+    <tr><td>SCCB SDA / SCL</td><td>26 / 27</td></tr>
+    <tr><td>D0-D3</td><td>5, 18, 19, 21</td></tr>
+    <tr><td>D4-D7</td><td>36, 39, 34, 35</td></tr>
+    <tr><td>闪光灯 LED</td><td>4</td></tr>
+  </table>
   <h2>最小配置骨架</h2>
   <pre><code>camera_config_t config{};
 config.pixel_format = PIXFORMAT_JPEG;
@@ -42,7 +52,7 @@ config.jpeg_quality = 12;
 config.fb_count = psramFound() ? 2 : 1;
 config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
 esp_err_t err = esp_camera_init(&amp;config);</code></pre>
-  <div class="warning"><strong>先查板型：</strong>上面的骨架没有包含 GPIO 引脚，因为引脚必须来自你的开发板资料或官方示例的对应板型配置。</div>
+  <div class="warning"><strong>不要只按传感器型号抄引脚：</strong>这组 GPIO 来自你这块板子的照片、AI Thinker 对应配置和实机 PSRAM 验证；换另一种 ESP32-CAM 板型时要重新确认。</div>
   <h2>可信资料</h2>
   <p><a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">官方 CameraWebServer 示例</a> · <a href="https://github.com/espressif/esp32-camera">官方 esp32-camera 驱动</a> · <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html">官方 Wi‑Fi API</a></p>
 </main></body></html>

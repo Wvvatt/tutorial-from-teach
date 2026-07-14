@@ -26,4 +26,5 @@
 
 ## Gaps
 
-- 当前还不知道开发板的准确型号和摄像头排线引脚映射。进入第 7 课前需要补齐这两个信息，否则不能安全复用 CameraWebServer 的板型配置。
+- 三张硬件照片已确认主板布局与 Espressif 官方 `CAMERA_MODEL_AI_THINKER` 引脚配置匹配；下载底板为 `HW-381 ESP32-CAM-MB V0.0.1`。照片不能证明主板的原厂品牌，但足以高置信度采用 AI Thinker 兼容 GPIO 表。
+- PSRAM 已在 `board = esp32cam` 构建下实机确认：约 4 MB，`psramFound()==true`。通用 `esp32dev` 构建会因未启用 `BOARD_HAS_PSRAM` 而误报为 0。

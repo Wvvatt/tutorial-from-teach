@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 9 课：用 HTTP 返回一张 JPEG</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:880px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0008-capture-first-jpeg.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/esp32-camera-reference.html">摄像头速查</a></p>
+<h1>用 HTTP 返回一张 JPEG</h1><p class="muted">第 9 课 · 预计 25 分钟 · 浏览器可见结果</p>
+<div class="goal"><strong>本课成果：</strong>ESP32 提供 <code>GET /capture</code>。浏览器每刷新一次，摄像头抓取一张新 JPEG，并以 <code>image/jpeg</code> 响应；连续刷新三次，照片正常且心跳继续。</div>
+
+<h2>1. 把两条已知链路接起来</h2><pre><code>server.handleClient()
+    ↓ 找到 GET /capture
+handleCapture()
+    ↓
+fb_get() → HTTP headers → JPEG body → fb_return()</code></pre>
+<p><code>server.on()</code> 负责注册路由，<code>handleClient()</code> 负责让请求获得处理机会。新知识只有一个：HTTP 正文不是文字，而是 <code>fb-&gt;buf</code> 指向的 JPEG 原始字节。</p>
+
+<h2>2. 响应的三个组成部分</h2><table><tr><th>部分</th><th>本课内容</th><th>作用</th></tr><tr><td>状态码</td><td><code>200</code></td><td>抓拍成功</td></tr><tr><td>Content-Type</td><td><code>image/jpeg</code></td><td>告诉浏览器按 JPEG 解码</td></tr><tr><td>Content-Length</td><td><code>fb-&gt;len</code></td><td>告诉浏览器正文有多少字节</td></tr></table>
+
+<h2>3. 增加抓拍路由处理函数</h2><p>把下面函数放在 <code>httpLoop()</code> 之前：</p>
+<pre><code>static void handleCapture() {
+    if (!cameraReady) {
+        server.send(503, "text/plain; charset=utf-8", "camera not ready\n");
+        return;
+    }
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == nullptr) {
+        server.send(500, "text/plain; charset=utf-8", "capture failed\n");
+        return;
+    }
+
+    server.sendHeader("Cache-Control", "no-store");
+    server.setContentLength(fb-&gt;len);
+    server.send(200, "image/jpeg", "");
+    server.sendContent(reinterpret_cast&lt;const char*&gt;(fb-&gt;buf), fb-&gt;len);
+
+    Serial.printf("http: GET /capture 200 bytes=%zu\n", fb-&gt;len);
+    esp_camera_fb_return(fb);
+}</code></pre>
+<div class="warn"><strong>所有权边界：</strong><code>sendContent()</code> 使用 <code>fb-&gt;buf</code> 作为响应正文，所以此前不能归还缓冲；发送调用完成后立刻 <code>fb_return()</code>，让缓冲池能接收下一帧。不要调用 <code>free(fb)</code>。</div>
+
+<h2>4. 注册路由</h2><p>在 <code>httpLoop()</code> 的 <code>server.begin()</code> 之前加入一行：</p>
+<pre><code>server.on("/health", HTTP_GET, handleHealth);
+server.on("/capture", HTTP_GET, handleCapture);
+server.onNotFound([] { server.send(404, "text/plain; charset=utf-8", "not found\n"); });</code></pre>
+<p>注册仍然只执行一次。真正处理请求仍靠 <code>loop()</code> 不断调用 <code>server.handleClient()</code>。</p>
+
+<h2>5. 编译、烧录、查看照片</h2><pre><code>pio run -t upload
+pio device monitor</code></pre><p>从串口找到 ESP32 的 IP，例如 <code>192.168.1.195</code>，在浏览器访问：</p><pre><code>http://192.168.1.195/capture</code></pre><p>也可以在 Mac 保存响应并查看响应头：</p><pre><code>curl -D - http://192.168.1.195/capture -o capture.jpg
+file capture.jpg</code></pre><p>关键证据应包括：</p><pre><code>HTTP/1.1 200 OK
+Content-Type: image/jpeg
+Content-Length: ...
+
+http: GET /capture 200 bytes=...</code></pre>
+
+<h2>6. 三次刷新实验</h2><ol><li>打开 <code>/capture</code>，确认浏览器显示照片。</li><li>移动摄像头或改变画面，然后刷新两次。</li><li>确认画面变化、每次字节数可能不同，并且串口心跳仍继续。</li></ol><p><code>Cache-Control: no-store</code> 防止浏览器直接复用旧照片，让每次刷新更可靠地到达 ESP32。</p>
+
+<h2>7. 故障签名</h2><ul><li><code>503 camera not ready</code>：摄像头初始化失败，先看启动时的十六进制错误码。</li><li><code>500 capture failed</code>：初始化成功但取帧失败，检查供电、排线及缓冲是否归还。</li><li>浏览器下载乱码文本或不显示：检查 <code>Content-Type</code> 是否为 <code>image/jpeg</code>。</li><li>照片截断：检查 <code>Content-Length</code> 是否等于 <code>fb-&gt;len</code>，以及是否过早归还缓冲。</li><li>第一次成功、后续卡住：优先检查所有成功路径是否执行 <code>fb_return()</code>。</li></ul>
+
+<h2>8. 回忆检查</h2><p>为什么 <code>fb_return()</code> 必须放在 <code>sendContent()</code> 后面，但又不能无限推迟？请在答案中使用“指针”“响应正文”“缓冲池”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>浏览器能直接显示 <code>/capture</code> 返回的照片。</li><li>响应头包含 <code>image/jpeg</code> 和正确长度。</li><li>连续刷新三次都成功，照片内容发生变化。</li><li>心跳继续，并能解释发送和归还之间的所有权边界。</li></ul>
+<p class="muted">把一次 <code>curl -D -</code> 的响应头和连续三次抓拍日志发给我。遇到不清楚的 API 或错误，随时问我。</p>
+<p><strong>主资料：</strong>Espressif Arduino Core 的 <a href="https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer/src/WebServer.h">WebServer API</a> 与 <a href="https://github.com/espressif/esp32-camera">esp32-camera 驱动</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('指针'))f.textContent='先说明 sendContent() 正在使用什么来读取 JPEG。';else if(!t.includes('响应正文'))f.textContent='再说明这些字节在 HTTP 中扮演什么角色。';else if(!t.includes('缓冲池'))f.textContent='最后说明发送完成后内存应该回到哪里。';else f.textContent='边界正确。现在用连续三次刷新验证归还时机。'};</script>
+</main></body></html>

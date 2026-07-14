@@ -1,0 +1,102 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 8 课：抓取第一张 JPEG</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:880px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0007-identify-camera-pin-map.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/esp32-camera-reference.html">摄像头速查</a></p>
+<h1>抓取第一张 JPEG</h1><p class="muted">第 8 课 · 预计 30 分钟 · 串口可见结果</p>
+<div class="goal"><strong>本课成果：</strong>启动时识别 OV2640，按串口命令 <code>c</code> 抓取一帧 QVGA JPEG，打印宽高、字节数、格式和 JPEG 首尾标记；连续抓三次都能成功且心跳继续。</div>
+
+<h2>1. 先回忆内存所有权</h2><p>摄像头驱动拥有一组帧缓冲。<code>esp_camera_fb_get()</code> 暂时把一个缓冲借给你；处理完必须调用 <code>esp_camera_fb_return()</code> 归还。这里不是普通的“读取一个值”，而是借用一块可能位于 PSRAM 的大内存。</p>
+<pre><code>驱动缓冲池 → fb_get() → 你的代码 → fb_return() → 驱动缓冲池</code></pre>
+
+<h2>2. 引入驱动并保存初始化状态</h2><p>在 include 区加入：</p><pre><code>#include &lt;esp_camera.h&gt;</code></pre><p>在匿名命名空间加入：</p><pre><code>bool cameraReady = false;</code></pre>
+
+<h2>3. 填入已验证的 AI Thinker 兼容引脚</h2><p>加入初始化函数：</p>
+<pre><code>static bool cameraBegin() {
+    camera_config_t config{};
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer = LEDC_TIMER_0;
+
+    config.pin_d0 = 5;
+    config.pin_d1 = 18;
+    config.pin_d2 = 19;
+    config.pin_d3 = 21;
+    config.pin_d4 = 36;
+    config.pin_d5 = 39;
+    config.pin_d6 = 34;
+    config.pin_d7 = 35;
+    config.pin_xclk = 0;
+    config.pin_pclk = 22;
+    config.pin_vsync = 25;
+    config.pin_href = 23;
+    config.pin_sccb_sda = 26;
+    config.pin_sccb_scl = 27;
+    config.pin_pwdn = 32;
+    config.pin_reset = -1;
+
+    config.xclk_freq_hz = 20000000;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.frame_size = FRAMESIZE_QVGA;
+    config.jpeg_quality = 12;
+    config.fb_count = 1;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+
+    const esp_err_t err = esp_camera_init(&amp;config);
+    if (err != ESP_OK) {
+        Serial.printf("camera: init failed err=0x%x\n", err);
+        return false;
+    }
+
+    sensor_t* sensor = esp_camera_sensor_get();
+    Serial.printf("camera: ready pid=0x%04x psram=%s\n",
+                  sensor-&gt;id.PID, psramFound() ? "yes" : "no");
+    return true;
+}</code></pre>
+<div class="warn"><strong>为什么先用 QVGA + 单缓冲：</strong>我们已经确认 PSRAM，但第一次实验只验证传感器、GPIO、DMA 和缓冲生命周期。先减少变量，稳定后再提高分辨率或使用双缓冲。</div>
+
+<h2>4. 抓取并验证一帧</h2><p>加入函数：</p>
+<pre><code>static void captureOnce() {
+    if (!cameraReady) {
+        Serial.println("camera: not ready");
+        return;
+    }
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == nullptr) {
+        Serial.println("camera: capture failed");
+        return;
+    }
+
+    const bool jpegStart = fb-&gt;len &gt;= 2
+        &amp;&amp; fb-&gt;buf[0] == 0xFF &amp;&amp; fb-&gt;buf[1] == 0xD8;
+    const bool jpegEnd = fb-&gt;len &gt;= 2
+        &amp;&amp; fb-&gt;buf[fb-&gt;len - 2] == 0xFF
+        &amp;&amp; fb-&gt;buf[fb-&gt;len - 1] == 0xD9;
+
+    Serial.printf("camera: %zux%zu bytes=%zu format=%d jpeg=%s\n",
+                  fb-&gt;width, fb-&gt;height, fb-&gt;len,
+                  static_cast&lt;int&gt;(fb-&gt;format),
+                  jpegStart &amp;&amp; jpegEnd ? "valid" : "invalid");
+
+    esp_camera_fb_return(fb);
+}</code></pre>
+<p><code>FF D8</code> 是 JPEG 的 SOI（Start of Image），<code>FF D9</code> 是 EOI（End of Image）。这不能证明画面好看，但能证明缓冲区像一份完整 JPEG。</p>
+
+<h2>5. 接入 setup 和串口命令</h2><p>在 <code>setup()</code> 中、打印 PSRAM 之后调用：</p><pre><code>cameraReady = cameraBegin();</code></pre><p>在串口命令 <code>switch</code> 中加入：</p><pre><code>case 'c':
+    captureOnce();
+    return;</code></pre><p>如果编译器提示函数尚未声明，把 <code>cameraBegin()</code> 和 <code>captureOnce()</code> 放在 <code>handleSerialInput()</code> 之前。</p>
+
+<h2>6. 编译、烧录、验证</h2><pre><code>pio run -t upload
+pio device monitor</code></pre><p>启动应看到：</p><pre><code>[RAM: external PSRAM]
+found=yes total=4192123 bytes free=4192123 bytes
+camera: ready pid=0x2642 psram=yes</code></pre><p>按三次 <code>c</code>，期望类似：</p><pre><code>camera: 320x240 bytes=12345 format=4 jpeg=valid
+camera: 320x240 bytes=11980 format=4 jpeg=valid
+camera: 320x240 bytes=12117 format=4 jpeg=valid</code></pre><p>每帧字节数不同是正常的：JPEG 是有损压缩，画面内容不同会产生不同大小。三次之间心跳必须继续。</p>
+
+<h2>7. 故障签名</h2><ul><li><code>init failed</code>：先记录完整十六进制错误码，不要盲改 GPIO。</li><li><code>capture failed</code>：检查供电、排线和 PSRAM；确认初始化确实成功。</li><li><code>jpeg=invalid</code>：记录长度及首尾字节，检查是否真是 <code>PIXFORMAT_JPEG</code>。</li><li>第一次成功、后面失败：优先检查是否遗漏 <code>esp_camera_fb_return(fb)</code>。</li></ul>
+
+<h2>8. 回忆检查</h2><p>为什么 <code>fb_get()</code> 成功后必须调用 <code>fb_return()</code>？请在答案中使用“所有权”“缓冲池”“下一帧”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>启动日志识别摄像头且 PSRAM 为 yes。</li><li>连续三次抓到 320×240 JPEG。</li><li>三次都显示 <code>jpeg=valid</code>。</li><li>心跳不中断，能解释缓冲归还的必要性。</li></ul>
+<p class="muted">把初始化行和连续三次 <code>c</code> 的日志发给我。遇到错误只发完整错误码，不要一次改多个参数；任何 API 不清楚，随时问我。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">CameraWebServer 初始化示例</a>与 <a href="https://github.com/espressif/esp32-camera">esp32-camera 驱动</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('所有权'))f.textContent='先说明 fb_get() 之后谁暂时持有这一帧。';else if(!t.includes('缓冲池'))f.textContent='再说明 fb_return() 把内存还到哪里。';else if(!t.includes('下一帧'))f.textContent='最后说明不归还会怎样影响后续抓拍。';else f.textContent='生命周期完整。现在用连续三帧成功证明你真的归还了缓冲。'};</script>
+</main></body></html>
