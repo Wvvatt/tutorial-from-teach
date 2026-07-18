@@ -1,0 +1,23 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ESP32-CAM 运行手册</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:15px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:880px;margin:auto;padding:38px 22px 65px}h1{font-size:2rem;margin:0 0 5px}h2{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);font-size:1.2rem}pre{overflow:auto;background:var(--code);padding:12px 14px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.note{padding:12px 14px;background:var(--soft);border-left:4px solid var(--accent)}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:left}a{color:var(--accent)}@media print{main{max-width:none;padding:0}}</style></head><body><main>
+<h1>ESP32-CAM 运行手册</h1><p>完成课程后用于启动、检查和恢复系统。</p>
+<h2>启动</h2><pre><code>cd /Users/watt/Code/Teach/esp32/esp32-test
+python3 server/server.py
+
+# 需要更新固件时
+pio run -t upload
+pio device monitor</code></pre>
+<h2>健康检查</h2><pre><code>curl http://192.168.1.195/health
+curl http://127.0.0.1:8000/api/status
+curl http://127.0.0.1:8000/api/images
+open http://127.0.0.1:8000/</code></pre>
+<h2>结果解释</h2><table><tr><th>证据</th><th>含义</th></tr><tr><td><code>upload_last_status=201</code></td><td>最近图片已被服务器接受</td></tr><tr><td>负数状态</td><td>连接/超时错误；设备会退避</td></tr><tr><td><code>404/413/415/422</code></td><td>协议错误；自动上传停用</td></tr><tr><td><code>upload_consecutive_failures=0</code></td><td>当前不在连续失败中</td></tr><tr><td><code>stored_images ≤ 120</code></td><td>服务端保留边界正常</td></tr></table>
+<h2>恢复顺序</h2><pre><code>1. 确认 Mac server 正在监听 8000
+2. 检查 ESP32 /health 与 Wi‑Fi IP
+3. 检查 upload_last_status
+4. 协议错误：修复 URL/正文，按 u 重新启用
+5. 暂时故障：等待退避，不要快速重启设备
+6. 摄像头失败：检查初始化错误码、供电、排线、PSRAM</code></pre>
+<h2>安全停止</h2><p>Python server 使用 <code>Ctrl+C</code> 正常停止。设备保持运行时会进入有限退避；服务恢复后无需重启 ESP32。不要在图片临时文件写入时强制删除整个目录。</p>
+<div class="note">先读取证据，再改变状态。一次只改一个边界：设备、网络、协议或存储。</div>
+<p>相关资料：<a href="reliability-state-machine.html">可靠性状态机</a> · <a href="image-store-playback.html">图片存储与播放</a> · <a href="esp32-camera-reference.html">摄像头速查</a></p>
+</main></body></html>

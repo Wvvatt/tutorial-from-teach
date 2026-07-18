@@ -3,3 +3,4 @@ src/secret.h
 .cache/
 compile_commands.json
 .DS_Store
+server/images

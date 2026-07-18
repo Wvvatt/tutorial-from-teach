@@ -1,0 +1,85 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 15 课：运行时修改上传间隔</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0014-end-to-end-acceptance.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/runtime-configuration.html">配置速查</a></p>
+<h1>运行时修改上传间隔</h1><p class="muted">第 15 课 · 预计 30 分钟 · 进阶阶段</p>
+<div class="goal"><strong>本课成果：</strong>完整功能已经写入 <a href="../esp32-test/src/main.cpp">main.cpp</a>。烧录一次后，无需再次编译便可通过 <code>GET /config</code> 查看上传间隔，通过 <code>POST /config?interval_ms=...</code> 修改它；设备会拒绝缺失、非数字和越界配置。</div>
+
+<h2>1. 先分清两种配置</h2><p><code>constexpr</code> 会在编译时固定下来；普通变量是设备运行期间的状态。最终代码把默认值和当前值明确分开：</p><pre><code>constexpr uint32_t kDefaultUploadIntervalMs = 10000;
+constexpr uint32_t kMinUploadIntervalMs = 1000;
+constexpr uint32_t kMaxUploadIntervalMs = 300000;
+uint32_t uploadIntervalMs = kDefaultUploadIntervalMs;</code></pre><p><code>uploadIntervalMs</code> 是当前正常上传间隔；<code>kMaxUploadBackoffMs</code> 仍是失败重试策略的边界，两者不能合并。</p>
+<div class="warn"><strong>这一课不保存到 Flash：</strong>重启后恢复 10 秒是预期行为。运行时配置与断电持久化是两个不同问题。</div>
+
+<h2>2. 读取接口</h2><p>完整实现用 JSON 返回当前状态：</p><pre><code>static void handleGetConfig() {
+    String body = "{\"interval_ms\":" + String(uploadIntervalMs) + "}\n";
+    server.send(200, "application/json", body);
+}</code></pre><p><code>GET</code> 只观察状态，不改变状态。</p>
+
+<h2>3. 解析、校验，再提交</h2><p>解析器要求每个字符都是数字，再检查范围；这样空字符串、负数、空格和尾随字符都不能混过去：</p><pre><code>static bool parseUploadInterval(const String&amp; raw,
+                                uint32_t&amp; parsedIntervalMs) {
+    if (raw.isEmpty()) {
+        return false;
+    }
+
+    for (size_t index = 0; index &lt; raw.length(); ++index) {
+        if (raw[index] &lt; '0' || raw[index] &gt; '9') {
+            return false;
+        }
+    }
+
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(raw.c_str(), &amp;end, 10);
+    if (*end != '\0' || parsed &lt; kMinUploadIntervalMs
+        || parsed &gt; kMaxUploadIntervalMs) {
+        return false;
+    }
+
+    parsedIntervalMs = static_cast&lt;uint32_t&gt;(parsed);
+    return true;
+}
+
+static void handlePostConfig() {
+    if (!server.hasArg("interval_ms")) {
+        server.send(400, "text/plain; charset=utf-8",
+                    "missing interval_ms\n");
+        return;
+    }
+
+    uint32_t parsedIntervalMs = 0;
+    if (!parseUploadInterval(server.arg("interval_ms"),
+                             parsedIntervalMs)) {
+        server.send(400, "text/plain; charset=utf-8",
+                    "interval_ms must be an integer from 1000 to 300000\n");
+        return;
+    }
+
+    uploadIntervalMs = parsedIntervalMs;
+    currentUploadDelayMs = uploadIntervalMs;
+    lastUploadAttemptMs = millis();
+
+    Serial.printf("config: upload interval=%lu ms\n",
+                  static_cast&lt;unsigned long&gt;(uploadIntervalMs));
+    handleGetConfig();
+}</code></pre><p>关键顺序是<strong>解析 → 校验 → 提交</strong>。非法输入不能先写入真实状态。更新时间边界后，下一次上传从本次配置提交时重新计时。</p>
+
+<h2>4. 同一路径的两种方法</h2><p>最终代码在 <code>httpLoop()</code> 的一次性注册区包含：</p><pre><code>server.on("/config", HTTP_GET, handleGetConfig);
+server.on("/config", HTTP_POST, handlePostConfig);</code></pre><p>路径相同，但 HTTP method 不同，因此会进入不同 handler。</p>
+
+<h2>5. 编译、烧录、获取证据</h2><pre><code>cd /Users/watt/Code/Teach/esp32/esp32-test
+pio run -t upload
+pio device monitor</code></pre><p>设备上线后另开终端：</p><pre><code>curl http://192.168.1.195/config
+curl -X POST 'http://192.168.1.195/config?interval_ms=30000'
+curl http://192.168.1.195/config</code></pre><p>应该得到 <code>{"interval_ms":30000}</code>；串口中后续成功上传的间隔应接近 30 秒。</p>
+<p class="goal"><strong>当前构建证据：</strong>完整固件已通过 PlatformIO 编译；RAM 51,872 / 327,680 字节（15.8%），Flash 1,034,301 / 3,145,728 字节（32.9%）。尚待你烧录后验证真实 HTTP 响应。</p>
+
+<h2>6. 故意输入坏数据</h2><pre><code>curl -i -X POST http://192.168.1.195/config
+curl -i -X POST 'http://192.168.1.195/config?interval_ms=hello'
+curl -i -X POST 'http://192.168.1.195/config?interval_ms=100'
+curl http://192.168.1.195/config</code></pre><p>前三个请求都必须返回 <code>400</code>，最后仍应是 30000。错误请求不应污染旧配置。</p>
+
+<h2>7. 回忆检查</h2><p>为什么 <code>handlePostConfig()</code> 修改 <code>uploadIntervalMs</code> 时暂时不需要 mutex？请在答案中使用“同一个 loop”“顺序执行”“共享状态”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li><code>GET /config</code> 返回当前上传间隔。</li><li>合法 POST 返回 <code>200</code>，无需烧录便改变上传节奏。</li><li>缺失、非数字和越界参数返回 <code>400</code>，旧值保持不变。</li><li>能解释为什么当前没有数据竞争，以及将 handler 放到独立 FreeRTOS task 后为什么必须重新评估。</li></ul>
+<p class="muted">把一次成功修改、三次 400 和修改后的两次上传时间发给我。任何一步不清楚，直接问我。</p>
+<p><strong>主资料：</strong>Espressif Arduino-ESP32 官方 <a href="https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer/src/WebServer.h">WebServer 接口定义</a>（<code>hasArg()</code>、<code>arg()</code>、<code>send()</code>）与 <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/network.html">Network API</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('同一个 loop'))f.textContent='先指出两个函数由谁调用。';else if(!t.includes('顺序执行'))f.textContent='再说明它们能否在同一时刻执行。';else if(!t.includes('共享状态'))f.textContent='最后说明被读写的变量是什么角色。';else f.textContent='正确：当前访问点都由同一个 loop 顺序执行。若以后跨 task，就要重新分析同步。'};</script>
+</main></body></html>

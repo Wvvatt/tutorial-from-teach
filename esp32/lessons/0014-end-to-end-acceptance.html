@@ -1,0 +1,53 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 14 课：端到端验收</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}.check{display:block;padding:8px 0}.check input{width:auto;margin-right:9px}textarea{width:100%;min-height:140px;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0013-reliability-and-diagnostics.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/operations-runbook.html">运行手册</a></p>
+<h1>端到端验收</h1><p class="muted">第 14 课 · 预计 30–45 分钟 · 不增加新功能</p>
+<div class="goal"><strong>本课成果：</strong>用可重复证据证明使命已经完成：设备可启动、抓拍、联网、定时上传、保存、播放，并能从服务不可达、协议错误和存储边界中恢复或安全停用。</div>
+
+<h2>当前真实起点</h2><p>开课检查时，ESP32 的 <code>/health</code> 返回：</p><pre><code>upload_enabled = yes
+upload_successes = 18
+upload_failures = 4
+upload_consecutive_failures = 2
+upload_last_status = -1
+upload_next_in_ms ≈ 38581</code></pre><p>同时 Mac 的 <code>127.0.0.1:8000</code> 不可连接。这已经证明“服务不可达 → 负数状态 → 退避”正在真实设备上运行。第一项验收就是在<strong>不重启 ESP32</strong> 的情况下恢复 server。</p>
+
+<h2>1. 恢复链路</h2><p>在 Mac 新终端启动服务：</p><pre><code>cd /Users/watt/Code/Teach/esp32/esp32-test
+python3 server/server.py</code></pre><p>等待最多 60 秒，再检查：</p><pre><code>curl http://192.168.1.195/health
+curl http://127.0.0.1:8000/api/status</code></pre><p>通过证据：<code>upload_successes</code> 增加、<code>upload_consecutive_failures=0</code>、<code>upload_last_status=201</code>，并且下一间隔恢复约 10 秒。</p>
+<label class="check"><input type="checkbox" data-key="recovery">服务恢复后 ESP32 无需重启便重新得到 201</label>
+
+<h2>2. 验收单张图片链路</h2><pre><code>curl -D /tmp/capture.headers \
+  http://192.168.1.195/capture \
+  -o /tmp/capture.jpg
+cat /tmp/capture.headers
+file /tmp/capture.jpg</code></pre><p>必须看到 <code>200</code>、<code>Content-Type: image/jpeg</code>、非零长度，并被 <code>file</code> 识别为 JPEG。</p>
+<label class="check"><input type="checkbox" data-key="capture">单张接口返回完整 JPEG</label>
+
+<h2>3. 验收保存与播放</h2><pre><code>curl http://127.0.0.1:8000/api/images | python3 -m json.tool
+curl http://127.0.0.1:8000/api/status | python3 -m json.tool
+find server/images -type f -name '*.tmp'</code></pre><p>打开 <a href="http://127.0.0.1:8000/">时间相册</a>，等待列表刷新并检查上一张、暂停、下一张。临时文件查询应无输出。</p>
+<label class="check"><input type="checkbox" data-key="playback">至少 5 张图片按时间顺序播放</label>
+<label class="check"><input type="checkbox" data-key="atomic">持续上传时刷新页面，无截断 JPEG 和遗留 tmp</label>
+
+<h2>4. 五分钟稳定性观察</h2><p>先保存一次 health，五分钟后再次保存：</p><pre><code>curl http://192.168.1.195/health -o /tmp/health-before.txt
+# 等待五分钟
+curl http://192.168.1.195/health -o /tmp/health-after.txt
+diff -u /tmp/health-before.txt /tmp/health-after.txt</code></pre><p>预期成功数持续增加、连续失败为 0；free heap 可以波动，但不应每次采样都单向下降。串口心跳持续，设备没有重启。</p>
+<label class="check"><input type="checkbox" data-key="stability">连续运行五分钟，无重启、卡死或持续内存下降</label>
+
+<h2>5. 协议错误应安全停止</h2><p>临时把 <code>kUploadUrl</code> 的路径改成 <code>/wrong</code>，烧录并按 <code>u</code> 开启。看到一次 <code>404</code> 后，health 应显示：</p><pre><code>upload_enabled = no
+upload_last_status = 404</code></pre><p>确认不会继续重复请求。然后恢复 <code>/images</code>、重新烧录并按 <code>u</code>。</p>
+<label class="check"><input type="checkbox" data-key="protocol">404 后自动上传停用，修复后可人工恢复</label>
+
+<h2>6. 验收服务端容量边界</h2><p>临时把 <code>MAX_STORED_IMAGES</code> 改成 5，重启 server，产生至少 8 次成功上传：</p><pre><code>find server/images -type f -name '*.jpg' | wc -l
+curl http://127.0.0.1:8000/api/status</code></pre><p>文件数应稳定为 5，结构化日志中出现 <code>"pruned":1</code>。完成后恢复为 120 并重启 server。</p>
+<label class="check"><input type="checkbox" data-key="retention">超过上限时只保留最新图片</label>
+
+<h2>7. 从内存画出完整系统</h2><p>不要看前面的代码，用自己的话解释下面五个边界。答案应包含“所有权”“FreeRTOS”“原子发布”“指数退避”。</p><textarea id="answer" placeholder="1. 摄像头帧从哪里借、何时归还？&#10;2. send/POST 返回代表什么？&#10;3. 为什么 MJPEG 流会停住心跳但 Wi‑Fi 仍工作？&#10;4. 为什么保存先写 tmp？&#10;5. 为什么网络错误退避而 404 停用？"></textarea><button id="checkAnswer">检查解释</button><p id="feedback"></p>
+
+<h2>使命验收</h2><table><tr><th>使命结果</th><th>对应证据</th></tr><tr><td>独立编译、烧录、串口诊断</td><td>固件构建成功；心跳、结构化上传日志</td></tr><tr><td>联网和 HTTP 状态</td><td><code>/health</code>、Wi‑Fi IP/RSSI/重连状态</td></tr><tr><td>OV2640 抓取与浏览器查看</td><td><code>/capture</code> JPEG 与 <code>/stream</code></td></tr><tr><td>间隔上传、保存和播放</td><td><code>POST /images</code>、原子文件、时间相册</td></tr><tr><td>处理失败与资源边界</td><td>退避、404 停用、120 张上限、状态接口</td></tr></table>
+<p id="progress" class="goal"></p>
+
+<h2>通过标准</h2><p>上面 7 项实机检查全部勾选，系统解释包含四个关键概念。完成后把两次 health、server status、404 日志和容量裁剪日志发给我；我会更新最终学习记录与课程完成状态。</p>
+<p><strong>主资料：</strong>本课程的 <a href="../reference/operations-runbook.html">运行手册</a>、<a href="../reference/reliability-state-machine.html">可靠性状态机</a>及 Espressif 官方 <a href="https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/error-handling.html">错误处理指南</a>。</p>
+<script>const boxes=[...document.querySelectorAll('[data-key]')],progress=document.querySelector('#progress');function update(){const done=boxes.filter(x=>x.checked).length;progress.textContent=`实机验收：${done} / ${boxes.length}`;boxes.forEach(x=>localStorage.setItem(`esp32-accept-${x.dataset.key}`,x.checked?'1':'0'))}boxes.forEach(x=>{x.checked=localStorage.getItem(`esp32-accept-${x.dataset.key}`)==='1';x.onchange=update});update();const answer=document.querySelector('#answer'),feedback=document.querySelector('#feedback');answer.value=localStorage.getItem('esp32-accept-answer')||'';answer.oninput=()=>localStorage.setItem('esp32-accept-answer',answer.value);document.querySelector('#checkAnswer').onclick=()=>{const t=answer.value;for(const [word,hint] of [['所有权','先解释帧缓冲的借用和归还。'],['FreeRTOS','再解释 loopTask 与 Wi‑Fi 任务。'],['原子发布','再解释 tmp 到 jpg 的发布边界。'],['指数退避','最后解释暂时失败的请求频率。']]){if(!t.includes(word)){feedback.textContent=hint;return}}feedback.textContent='系统模型完整；现在用全部实机证据完成验收。'};</script>
+</main></body></html>

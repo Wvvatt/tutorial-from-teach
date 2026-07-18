@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>图片存储与播放速查</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:15px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:860px;margin:auto;padding:38px 22px 65px}h1{font-size:2rem;margin:0 0 5px}h2{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);font-size:1.2rem}pre{overflow:auto;background:var(--code);padding:12px 14px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.note{padding:12px 14px;background:var(--soft);border-left:4px solid var(--accent)}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:left}a{color:var(--accent)}@media print{main{max-width:none;padding:0}}</style></head><body><main>
+<h1>图片存储与播放速查</h1><p>对应 <a href="../lessons/0012-save-and-playback.html">第 12 课</a>。</p>
+<h2>原子发布</h2><pre><code>POST body
+  → 验证 JPEG
+  → 写 .tmp
+  → flush + fsync + close
+  → os.replace(.tmp, .jpg)
+  → 查询 API 才能列出</code></pre><div class="note">公开列表只匹配 <code>*.jpg</code>。读取者看不到正在写入的临时文件；同文件系统内的 <code>os.replace()</code> 提供原子名称切换。</div>
+<h2>服务边界</h2><table><tr><th>接口</th><th>职责</th></tr><tr><td><code>POST /images</code></td><td>验证、保存并返回 <code>201</code> 与公开 URL</td></tr><tr><td><code>GET /api/images</code></td><td>返回最近 N 张的有序元数据</td></tr><tr><td><code>GET /images/name.jpg</code></td><td>只提供安全文件名对应的不可变 JPEG</td></tr><tr><td><code>GET /</code></td><td>提供播放器页面</td></tr></table>
+<h2>文件名</h2><pre><code>20260717T081530.123456Z-a1b2c3.jpg
+└────── UTC 接收时间 ──────┘  └唯一后缀┘</code></pre><p>按文件名排序即可得到接收时间顺序。它不是曝光时间；若需要真实拍摄时间，设备时钟必须同步并通过协议传递。</p>
+<h2>仍需设计</h2><p>容量上限、删除策略、认证、上传退避、结构化指标和设备端有限缓存属于可靠性层，不由“能保存”自动解决。</p>
+<p>主资料：Python 官方 <a href="https://docs.python.org/3/library/os.html#os.replace"><code>os.replace()</code></a> 与 <a href="https://docs.python.org/3/library/http.server.html"><code>http.server</code></a> 文档。</p>
+</main></body></html>

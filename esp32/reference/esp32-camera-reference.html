@@ -53,6 +53,29 @@ config.fb_count = psramFound() ? 2 : 1;
 config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
 esp_err_t err = esp_camera_init(&amp;config);</code></pre>
   <div class="warning"><strong>不要只按传感器型号抄引脚：</strong>这组 GPIO 来自你这块板子的照片、AI Thinker 对应配置和实机 PSRAM 验证；换另一种 ESP32-CAM 板型时要重新确认。</div>
+  <h2>WebServer 返回单张 JPEG</h2>
+  <pre><code>camera_fb_t* fb = esp_camera_fb_get();
+if (fb == nullptr) {
+    server.send(500, "text/plain", "capture failed\n");
+    return;
+}
+
+server.sendHeader("Cache-Control", "no-store");
+server.setContentLength(fb-&gt;len);
+server.send(200, "image/jpeg", "");
+server.sendContent(reinterpret_cast&lt;const char*&gt;(fb-&gt;buf), fb-&gt;len);
+esp_camera_fb_return(fb);</code></pre>
+  <p>HTTP 发送期间，<code>fb-&gt;buf</code> 必须保持有效。先发送正文，再归还帧缓冲；不能提前归还，也不能用 <code>free()</code> 释放。</p>
+  <h2>MJPEG 的线格式与控制权</h2>
+  <pre>Content-Type: multipart/x-mixed-replace; boundary=frame
+
+--frame
+Content-Type: image/jpeg
+Content-Length: N
+
+[N bytes JPEG]
+--frame ...</pre>
+  <p>同步 <code>WebServer</code> 的流处理函数若长期停在 <code>while (client.connected())</code>，Arduino <code>loop()</code> 就拿不回控制权。当前配置中 <code>loopTask</code> 在 CPU 核 1，Wi‑Fi 任务在核 0；Wi‑Fi 可以继续运行，但心跳只是 <code>loopTask</code> 顺序调用的函数。<code>delay(1)</code> 通过 FreeRTOS 暂停当前任务，恢复后仍回到原调用栈，并不会让心跳或其他路由自动运行。实时预览需要独立任务、独立服务或其他并发设计。</p>
   <h2>可信资料</h2>
   <p><a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">官方 CameraWebServer 示例</a> · <a href="https://github.com/espressif/esp32-camera">官方 esp32-camera 驱动</a> · <a href="https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html">官方 Wi‑Fi API</a></p>
 </main></body></html>

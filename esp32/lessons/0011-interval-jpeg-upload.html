@@ -1,0 +1,159 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 11 课：间隔拍照上传</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0010-mjpeg-stream-cost.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/http-protocol-boundary.html">HTTP 协议速查</a></p>
+<h1>间隔拍照上传</h1><p class="muted">第 11 课 · 预计 40 分钟 · 最终项目第一条纵向链路</p>
+<div class="goal"><strong>本课成果：</strong>按串口 <code>u</code> 开启上传后，ESP32 每 10 秒抓取一张 JPEG，向 Mac 的 <code>POST /images</code> 发送原始字节；Mac 验证类型、长度、JPEG 首尾标记并返回 <code>201 Created</code>。本课只验证，不保存图片。</div>
+<div class="warn"><strong>开课前关闭 <code>/stream</code> 标签页：</strong>第 10 课的同步流循环会占住 Arduino <code>loop()</code>；它不返回，下面的 <code>uploadLoop()</code> 就不会运行。</div>
+
+<h2>1. 先明确协议</h2><table><tr><th>项目</th><th>约定</th></tr><tr><td>方法与路径</td><td><code>POST /images</code></td></tr><tr><td>请求正文</td><td>一张 JPEG 的原始字节，不是 JSON，也不是 Base64</td></tr><tr><td>Content-Type</td><td><code>image/jpeg</code></td></tr><tr><td>成功状态码</td><td><code>201 Created</code></td></tr><tr><td>序号</td><td><code>X-Image-Sequence</code> 请求头</td></tr></table><p>直接传 JPEG 比 Base64 更小：Base64 通常会把体积增加约三分之一，而且双方还要额外编码、解码。</p>
+
+<h2>2. 让 Mac 接收并验证，但暂不落盘</h2><p>把 <code>esp32-test/server/server.py</code> 替换为：</p>
+<pre><code>import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+MAX_IMAGE_BYTES = 500_000
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send_json(self, status, payload):
+        body = (json.dumps(payload) + "\n").encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path == "/events":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            print("event:", body.decode("utf-8"))
+            self.send_json(201, {"accepted": True})
+            return
+
+        if self.path != "/images":
+            self.send_error(404)
+            return
+
+        content_type = self.headers.get_content_type()
+        length = int(self.headers.get("Content-Length", "0"))
+        sequence = self.headers.get("X-Image-Sequence", "?")
+
+        if content_type != "image/jpeg":
+            self.send_json(415, {"error": "expected image/jpeg"})
+            return
+        if length &lt; 4 or length &gt; MAX_IMAGE_BYTES:
+            self.send_json(413, {"error": "invalid image size"})
+            return
+
+        image = self.rfile.read(length)
+        complete = len(image) == length
+        jpeg = image.startswith(b"\xff\xd8") and image.endswith(b"\xff\xd9")
+        if not complete or not jpeg:
+            self.send_json(422, {"error": "invalid jpeg"})
+            return
+
+        print(f"image: seq={sequence} bytes={len(image)} jpeg=valid")
+        self.send_json(201, {
+            "accepted": True,
+            "sequence": sequence,
+            "bytes": len(image),
+        })
+
+
+server = ThreadingHTTPServer(("0.0.0.0", 8000), Handler)
+try:
+    print("receiver: listening on 0.0.0.0:8000")
+    server.serve_forever()
+except KeyboardInterrupt:
+    print("\nreceiver: stopped")
+finally:
+    server.server_close()</code></pre>
+
+<h2>3. Mac 先自测协议</h2><p>启动接收器：</p><pre><code>cd esp32-test
+python3 server/server.py</code></pre><p>另开终端，从 ESP32 的单张接口拿到真实 JPEG，再上传给本机：</p><pre><code>curl http://192.168.1.195/capture -o /tmp/esp32-test.jpg
+curl -i -X POST http://127.0.0.1:8000/images \
+  -H 'Content-Type: image/jpeg' \
+  -H 'X-Image-Sequence: mac-test' \
+  --data-binary @/tmp/esp32-test.jpg</code></pre><p>只有看到 <code>201 Created</code> 和 <code>jpeg=valid</code> 才继续。此时已证明服务端协议正确，后面出错就优先检查 ESP32 客户端。</p>
+
+<h2>4. 在 ESP32 中加入上传状态</h2><p>在全局状态区加入，把 IP 换成 Mac 的局域网地址：</p><pre><code>constexpr char kUploadUrl[] = "http://192.168.1.140:8000/images";
+constexpr uint32_t kUploadIntervalMs = 10000;
+uint32_t lastUploadAttemptMs = 0;
+uint32_t uploadSequence = 0;
+bool uploadEnabled = false;</code></pre><p>如果不确定 Mac IP：</p><pre><code>ipconfig getifaddr en0</code></pre><div class="warn"><strong>不要写 127.0.0.1：</strong>ESP32 里的这个地址表示 ESP32 自己，不是 Mac。</div>
+
+<h2>5. 抓一帧并作为二进制正文 POST</h2><pre><code>static void uploadFrame() {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == nullptr) {
+        Serial.println("upload: capture failed");
+        return;
+    }
+
+    const uint32_t sequence = ++uploadSequence;
+    const size_t frameLength = fb-&gt;len;
+
+    HTTPClient http;
+    http.setConnectTimeout(2000);
+    http.setTimeout(5000);
+    http.begin(kUploadUrl);
+    http.addHeader("Content-Type", "image/jpeg");
+    http.addHeader("X-Image-Sequence", String(sequence));
+
+    const int status = http.POST(fb-&gt;buf, frameLength);
+    esp_camera_fb_return(fb);
+
+    String result;
+    if (status &gt; 0) {
+        result = http.getString();
+    } else {
+        result = HTTPClient::errorToString(status);
+    }
+    http.end();
+
+    Serial.printf("upload: seq=%lu bytes=%zu status=%d result=%s\n",
+                  static_cast&lt;unsigned long&gt;(sequence), frameLength, status,
+                  result.c_str());
+}</code></pre><p><code>POST()</code> 返回后，HTTP 客户端已经使用完 JPEG 请求正文，所以可以立刻归还帧缓冲；读取服务器的小型 JSON 响应不再依赖 <code>fb-&gt;buf</code>。</p>
+
+<h2>6. 用 <code>millis()</code> 调度上传</h2><pre><code>static void uploadLoop() {
+    if (!uploadEnabled || WiFi.status() != WL_CONNECTED || !cameraReady) {
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (now - lastUploadAttemptMs &lt; kUploadIntervalMs) {
+        return;
+    }
+
+    lastUploadAttemptMs = now;
+    uploadFrame();
+}</code></pre><p>把它加入主循环：</p><pre><code>void loop() {
+    handleSerialInput();
+    heartbeatLoop();
+    wifiLoop();
+    httpLoop();
+    uploadLoop();
+}</code></pre><p>时间戳在调用阻塞的 <code>uploadFrame()</code> <em>之前</em> 更新。这样失败后不会每次 <code>loop()</code> 都立刻重试。</p>
+
+<h2>7. 用串口开关控制实验</h2><p>在命令 <code>switch</code> 中加入：</p><pre><code>case 'u':
+    uploadEnabled = !uploadEnabled;
+    lastUploadAttemptMs = millis();
+    Serial.printf("upload: %s interval=%lu ms\n",
+                  uploadEnabled ? "enabled" : "disabled",
+                  static_cast&lt;unsigned long&gt;(kUploadIntervalMs));
+    return;</code></pre><p>按一次 <code>u</code> 后等待 10 秒，期望连续看到三组对应日志：</p><pre><code># ESP32
+upload: seq=1 bytes=... status=201 result={"accepted": true, ...}
+
+# Mac
+image: seq=1 bytes=... jpeg=valid</code></pre>
+
+<h2>8. 失败实验</h2><ol><li>保持上传开启，停止 Python server。</li><li>等待一次上传，记录负数状态和错误文本。</li><li>确认最多每 10 秒尝试一次，心跳能在请求超时后恢复。</li><li>重启 server，不重启 ESP32，确认后续上传自动恢复到 <code>201</code>。</li></ol><p>本课不做立即重试、排队和图片缓存；这些属于第 13 课的可靠性策略。</p>
+
+<h2>9. 回忆检查</h2><p>为什么必须在调用可能阻塞的 <code>uploadFrame()</code> 之前更新计时状态？请在答案中使用“尝试时间”“阻塞”“重试风暴”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>Mac 自测 JPEG POST 返回 <code>201</code>。</li><li>ESP32 连续三次按约 10 秒间隔上传，Mac 均验证为完整 JPEG。</li><li>服务器停止时出现有边界的失败，重启后自动恢复。</li><li>上传成功和失败后，帧缓冲都已归还，心跳恢复。</li></ul>
+<p class="muted">把 Mac 的三条 <code>jpeg=valid</code>、ESP32 的三条 <code>status=201</code>，以及一次服务器不可达日志发给我。任何一步不清楚，随时问我。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient">HTTPClient 实现与示例</a>；Python 官方 <a href="https://docs.python.org/3/library/http.server.html">http.server 文档</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('尝试时间'))f.textContent='先说明本轮上传从哪个时间点开始计时。';else if(!t.includes('阻塞'))f.textContent='再说明 POST 期间 loop() 发生什么。';else if(!t.includes('重试风暴'))f.textContent='最后说明失败返回后为什么不能立即再次请求。';else f.textContent='调度边界正确。现在用停服实验验证尝试频率。'};</script>
+</main></body></html>

@@ -14,7 +14,19 @@ http.begin("http://192.168.1.10:8000/events");
 http.addHeader("Content-Type", "application/json");
 int status = http.POST("{\"uptime_ms\":1234}");
 http.end();</code></pre>
+<h2>原始 JPEG 上传</h2><pre><code>camera_fb_t* fb = esp_camera_fb_get();
+
+HTTPClient http;
+http.setConnectTimeout(2000);
+http.setTimeout(5000);
+http.begin("http://MAC_IP:8000/images");
+http.addHeader("Content-Type", "image/jpeg");
+int status = http.POST(fb-&gt;buf, fb-&gt;len);
+
+esp_camera_fb_return(fb);
+http.end();</code></pre>
+<table><tr><th>响应</th><th>客户端含义</th></tr><tr><td><code>201</code></td><td>服务器接受了完整 JPEG</td></tr><tr><td><code>4xx</code></td><td>路径、媒体类型、大小或 JPEG 内容不符合协议</td></tr><tr><td><code>5xx</code></td><td>服务端处理失败</td></tr><tr><td>负数</td><td>连接、DNS、超时等客户端网络错误，不是 HTTP 状态码</td></tr></table>
+<p>JPEG 已经是二进制格式，直接作为请求正文发送；不要先转 Base64。<code>POST()</code> 返回后网络层不再读取原帧，调用者应尽快把它归还摄像头缓冲池。</p>
 <div class="note">状态码是协议证据，不是装饰。只有拿到预期的 2xx，设备才应该把本次发送记作成功。</div>
 <p>主资料：Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/HTTPClient/examples/BasicHttpClient">HTTPClient 示例</a>；Python 官方 <a href="https://docs.python.org/3/library/http.server.html">http.server 文档</a>。</p>
 </main></body></html>
-

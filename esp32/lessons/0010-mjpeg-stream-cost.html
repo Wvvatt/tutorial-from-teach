@@ -1,0 +1,99 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 10 课：实时预览的代价</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:900px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0009-http-jpeg-capture.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/esp32-camera-reference.html">摄像头速查</a></p>
+<h1>实时预览的代价</h1><p class="muted">第 10 课 · 预计 30 分钟 · 对照实验</p>
+<div class="goal"><strong>本课成果：</strong>增加最小 <code>GET /stream</code> MJPEG 预览，实测 FPS、每秒发送字节和剩余堆；同时证明同步流处理会占住 Arduino <code>loop()</code>，让心跳和其他 HTTP 路由暂时失去控制权。</div>
+
+<h2>1. MJPEG 不是一种新的视频编码</h2><p>MJPEG 流就是在一个长期不结束的 HTTP 响应中，不断放入完整 JPEG。每帧前都有边界和自己的 multipart 分段头：</p><pre><code>Content-Type: multipart/x-mixed-replace; boundary=frame
+
+--frame
+Content-Type: image/jpeg
+Content-Length: 12345
+
+[一张 JPEG]
+--frame
+Content-Type: image/jpeg
+Content-Length: 11980
+
+[下一张 JPEG] ...</code></pre><p>浏览器读到一个边界就解码一帧，因此不需要 H.264 那种帧间压缩和视频解码器。</p>
+
+<h2>2. 增加最小流处理函数</h2><p>把下面函数放在 <code>httpLoop()</code> 之前：</p>
+<pre><code>static void handleStream() {
+    if (!cameraReady) {
+        server.send(503, "text/plain; charset=utf-8", "camera not ready\n");
+        return;
+    }
+
+    WiFiClient client = server.client();
+    client.print(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n");
+
+    uint32_t reportStartedMs = millis();
+    uint32_t frames = 0;
+    uint32_t bytesSent = 0;
+
+    while (client.connected()) {
+        camera_fb_t* fb = esp_camera_fb_get();
+        if (fb == nullptr) {
+            Serial.println("stream: capture failed");
+            break;
+        }
+
+        const size_t frameLength = fb-&gt;len;
+        client.printf(
+            "--frame\r\nContent-Type: image/jpeg\r\n"
+            "Content-Length: %zu\r\n\r\n",
+            frameLength);
+        const size_t written = client.write(fb-&gt;buf, frameLength);
+        client.print("\r\n");
+        esp_camera_fb_return(fb);
+
+        if (written != frameLength) {
+            Serial.printf("stream: short write %zu/%zu\n", written, frameLength);
+            break;
+        }
+
+        ++frames;
+        bytesSent += static_cast&lt;uint32_t&gt;(written);
+        const uint32_t now = millis();
+        const uint32_t elapsedMs = now - reportStartedMs;
+        if (elapsedMs &gt;= 1000) {
+            Serial.printf("stream: fps=%lu bytes_per_sec=%lu free_heap=%u\n",
+                          static_cast&lt;unsigned long&gt;(frames * 1000 / elapsedMs),
+                          static_cast&lt;unsigned long&gt;(bytesSent * 1000 / elapsedMs),
+                          ESP.getFreeHeap());
+            reportStartedMs = now;
+            frames = 0;
+            bytesSent = 0;
+        }
+
+        delay(1);
+    }
+
+    client.stop();
+    Serial.println("stream: client disconnected");
+}</code></pre>
+<div class="warn"><strong>先归还，再判断短写：</strong>只要 <code>fb_get()</code> 成功，这条路径最终就必须归还帧缓冲。即使网络写入失败，也不能把缓冲留在池外。</div>
+
+<h2>3. 注册路由</h2><p>在 <code>server.begin()</code> 之前加入：</p><pre><code>server.on("/stream", HTTP_GET, handleStream);</code></pre><p>烧录后访问：</p><pre><code>http://你的ESP32地址/stream</code></pre><p>如果浏览器不能直接显示 multipart 响应，用一个最小 HTML 页面测试：</p><pre><code>&lt;img src="http://你的ESP32地址/stream"&gt;</code></pre>
+
+<h2>4. 对照实验</h2><table><tr><th>步骤</th><th>操作</th><th>观察</th></tr><tr><td>A：单张</td><td>刷新 <code>/capture</code> 三次</td><td>每次只占用一次请求；心跳继续，<code>/health</code> 可访问。</td></tr><tr><td>B：持续流</td><td>打开 <code>/stream</code> 约 10 秒</td><td>记录 FPS、bytes/s、free heap；观察心跳是否继续。</td></tr><tr><td>C：并发请求</td><td>流仍开着时，在 Mac 运行下面的 curl</td><td>同步 WebServer 无法回到 <code>handleClient()</code> 处理第二个请求。</td></tr><tr><td>D：恢复</td><td>关闭流页面</td><td>处理函数返回，心跳和其他路由恢复。</td></tr></table>
+<pre><code>curl --max-time 3 http://你的ESP32地址/health</code></pre>
+
+<h2>5. Wi‑Fi 为什么能运行，心跳却停止</h2><pre><code>Arduino loopTask（当前配置固定在 CPU 核 1）
+  └─ httpLoop()
+      └─ server.handleClient()
+          └─ handleStream()
+              └─ while (client.connected())  ← 一直停在这里</code></pre><p>Arduino 的 <code>delay(1)</code> 最终调用 FreeRTOS 的 <code>vTaskDelay()</code>，暂时阻塞当前 <code>loopTask</code>；恢复后仍从同一个调用栈继续。它不是协程切换，也不会替你再次调用 <code>heartbeatLoop()</code>。</p><p>在当前双核配置中，Wi‑Fi 驱动任务固定在 CPU 核 0，本来就能与核 1 的 <code>loopTask</code> 并行；如果多个任务位于同一核心，<code>vTaskDelay()</code> 也会给其他就绪任务调度机会。心跳不同：<code>heartbeatLoop()</code> 不是独立任务，只是 Arduino <code>loop()</code> 顺序调用的普通函数。<code>handleStream()</code> 不返回，它就永远拿不到控制权。</p>
+
+<h2>6. 单张与实时流的取舍</h2><table><tr><th></th><th><code>/capture</code></th><th><code>/stream</code></th></tr><tr><td>连接时间</td><td>一张后结束</td><td>长期保持</td></tr><tr><td>网络流量</td><td>用户请求时产生</td><td>持续产生</td></tr><tr><td>帧缓冲周转</td><td>一次借还</td><td>连续借还</td></tr><tr><td>当前同步实现</td><td>很快回到 loop</td><td>占住 loop</td></tr><tr><td>适合任务</td><td>定时拍照、上传</td><td>人工实时预览</td></tr></table><p>最终任务是“间隔拍照上传”，因此不需要把 MJPEG 当作最终架构。本课的价值是看见实时预览的成本。</p>
+
+<h2>7. 回忆检查</h2><p>为什么流打开时 Wi‑Fi 仍能工作，但心跳代码不能继续？请在答案中使用“FreeRTOS”“调用栈”“控制权”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>浏览器能看到 MJPEG 实时画面。</li><li>记录至少 5 秒的 FPS、bytes/s 和 free heap。</li><li>流打开时 <code>/health</code> 超时，关闭后恢复。</li><li>能解释 CPU 调度与 Arduino <code>loop()</code> 控制权的区别。</li></ul>
+<p class="muted">把一段 stream 指标、心跳停止/恢复的日志和 <code>curl</code> 结果发给我。任何 API 或现象不清楚，随时问我。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://github.com/espressif/arduino-esp32/tree/master/libraries/ESP32/examples/Camera/CameraWebServer">CameraWebServer 示例</a>与 <a href="https://github.com/espressif/esp32-camera">esp32-camera 驱动</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('FreeRTOS'))f.textContent='先说明 Wi‑Fi 与 Arduino loop 分别由什么任务运行。';else if(!t.includes('调用栈'))f.textContent='再说明 handleStream() 是否已经返回。';else if(!t.includes('控制权'))f.textContent='最后说明 heartbeatLoop() 怎样才能再次获得执行机会。';else f.textContent='区别正确。现在用心跳停止与恢复的日志证明它。'};</script>
+</main></body></html>

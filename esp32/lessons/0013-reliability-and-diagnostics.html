@@ -1,0 +1,190 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>第 13 课：可靠性与可诊断性</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--warn:#fff5d9;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:940px;margin:auto;padding:42px 22px 72px}h1{font-size:2.35rem;line-height:1.15;margin:0 0 8px}h2{margin-top:36px;padding-top:17px;border-top:1px solid var(--line)}pre{overflow:auto;background:var(--code);padding:13px 15px;border-radius:4px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}.goal{background:var(--soft);border-left:4px solid var(--accent);padding:14px 16px}.warn{background:var(--warn);padding:13px 15px}.muted{color:var(--muted)}a{color:var(--accent)}input{width:100%;padding:10px;border:1px solid #b8c4cc;font:inherit}button{margin-top:10px;padding:9px 13px;border:0;background:var(--accent);color:white;font:inherit}@media print{button,input{display:none}main{max-width:none;padding:0}}</style></head><body><main>
+<p><a href="0012-save-and-playback.html">上一课</a> · <a href="../CURRICULUM.md">课程路线</a> · <a href="../reference/reliability-state-machine.html">可靠性速查</a></p>
+<h1>可靠性与可诊断性</h1><p class="muted">第 13 课 · 预计 55 分钟 · 当前课程收尾</p>
+<div class="goal"><strong>本课成果：</strong>设备能区分成功、可恢复失败和协议错误；网络、5xx、408 和 429 按 10→20→40→60 秒退避，成功后复位；确定的协议错误则停止自动上传。<code>/health</code> 暴露上传状态；服务端只保留最近 120 张并输出结构化日志。</div>
+
+<h2>1. 先确定失败策略</h2><table><tr><th>结果</th><th>含义</th><th>策略</th></tr><tr><td><code>201</code></td><td>服务器已保存 JPEG</td><td>成功计数 +1，退避复位到 10 秒</td></tr><tr><td>负数 / <code>5xx</code></td><td>连接、超时或服务器暂时失败</td><td>失败计数 +1，指数退避</td></tr><tr><td><code>408</code> / <code>429</code></td><td>请求超时或服务端限流</td><td>指数退避后重试</td></tr><tr><td><code>404/413/415/422</code></td><td>路径、类型或正文违反本协议</td><td>停止自动上传，修复后人工重新开启</td></tr><tr><td>摄像头失败</td><td>没有拿到帧</td><td>归类为可恢复失败并退避</td></tr></table>
+<div class="warn"><strong>本项目的有限缓存策略是 0 张待上传图片：</strong>失败帧立即归还，恢复后重新拍摄。这样断网不会耗尽 PSRAM。代价是断网期间的画面会丢失；若业务要求一张不丢，应使用 SD 卡上的有限持久队列，而不是长期占用摄像头缓冲。</div>
+
+<h2>2. 给设备增加明确状态</h2><p>在上传全局状态旁加入：</p><pre><code>constexpr uint32_t kMaxUploadBackoffMs = 60000;
+constexpr int kCaptureFailed = -1000;
+
+uint32_t currentUploadDelayMs = kUploadIntervalMs;
+uint32_t uploadSuccessCount = 0;
+uint32_t uploadFailureCount = 0;
+uint8_t consecutiveUploadFailures = 0;
+int lastUploadStatus = 0;</code></pre><p>这些字段不是“多打印一些日志”，而是上传状态机的可观察状态。</p>
+
+<h2>3. 让单次上传返回结果</h2><p>把 <code>uploadFrame()</code> 的返回类型改为 <code>int</code>，并替换为：</p><pre><code>static int uploadFrame() {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == nullptr) {
+        Serial.println("{\"event\":\"upload\",\"error\":\"capture_failed\"}");
+        return kCaptureFailed;
+    }
+
+    const uint32_t sequence = ++uploadSequence;
+    const size_t frameLength = fb-&gt;len;
+
+    HTTPClient http;
+    http.setConnectTimeout(2000);
+    http.setTimeout(5000);
+    http.begin(kUploadUrl);
+    http.addHeader("Content-Type", "image/jpeg");
+    http.addHeader("X-Image-Sequence", String(sequence));
+
+    const int status = http.POST(fb-&gt;buf, frameLength);
+    esp_camera_fb_return(fb);
+    http.end();
+
+    Serial.printf(
+        "{\"event\":\"upload\",\"seq\":%lu,\"bytes\":%zu,\"status\":%d}\n",
+        static_cast&lt;unsigned long&gt;(sequence), frameLength, status);
+    return status;
+}</code></pre><p>无论 HTTP 成功还是失败，<code>POST()</code> 返回后都归还帧缓冲。退避状态只保存数字，不保存那一大块 JPEG。</p>
+
+<h2>4. 把定时器升级成退避状态机</h2><pre><code>static bool isPermanentUploadFailure(int status) {
+    return status &gt;= 400 &amp;&amp; status &lt; 500
+        &amp;&amp; status != 408 &amp;&amp; status != 429;
+}
+
+static void uploadLoop() {
+    if (!uploadEnabled || WiFi.status() != WL_CONNECTED || !cameraReady) {
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (now - lastUploadAttemptMs &lt; currentUploadDelayMs) {
+        return;
+    }
+
+    lastUploadAttemptMs = now;
+    const int status = uploadFrame();
+    lastUploadStatus = status;
+
+    if (status == 201) {
+        ++uploadSuccessCount;
+        consecutiveUploadFailures = 0;
+        currentUploadDelayMs = kUploadIntervalMs;
+        return;
+    }
+
+    ++uploadFailureCount;
+    if (consecutiveUploadFailures &lt; 255) {
+        ++consecutiveUploadFailures;
+    }
+
+    if (isPermanentUploadFailure(status)) {
+        uploadEnabled = false;
+        currentUploadDelayMs = kUploadIntervalMs;
+        Serial.printf(
+            "{\"event\":\"upload_disabled\",\"status\":%d,"
+            "\"reason\":\"protocol_error\"}\n",
+            status);
+        return;
+    }
+
+    if (currentUploadDelayMs &lt; kMaxUploadBackoffMs) {
+        currentUploadDelayMs *= 2;
+        if (currentUploadDelayMs &gt; kMaxUploadBackoffMs) {
+            currentUploadDelayMs = kMaxUploadBackoffMs;
+        }
+    }
+
+    Serial.printf(
+        "{\"event\":\"upload_backoff\",\"failures\":%u,"
+        "\"next_delay_ms\":%lu}\n",
+        static_cast&lt;unsigned&gt;(consecutiveUploadFailures),
+        static_cast&lt;unsigned long&gt;(currentUploadDelayMs));
+}</code></pre><p>这里退避的是下一次<strong>新抓拍</strong>。网络断开时不会抓帧；Wi‑Fi 重连后，若等待时间已经满足，就会立即进行下一次尝试。</p>
+
+<h2>5. 人工重新开启时复位状态</h2><p>把串口命令 <code>u</code> 改为：</p><pre><code>case 'u':
+    uploadEnabled = !uploadEnabled;
+    consecutiveUploadFailures = 0;
+    currentUploadDelayMs = kUploadIntervalMs;
+    lastUploadAttemptMs = millis();
+    Serial.printf("upload: %s interval=%lu ms\n",
+                  uploadEnabled ? "enabled" : "disabled",
+                  static_cast&lt;unsigned long&gt;(currentUploadDelayMs));
+    return;</code></pre><p>顺手修复现有的命令贯穿：在 <code>case 'r'</code> 的 <code>WiFi.reconnect()</code> 后加入 <code>return;</code>，否则它会继续进入 <code>case 'p'</code>，意外发送事件。</p>
+
+<h2>6. 让 <code>/health</code> 回答“系统现在怎样”</h2><p>在 <code>handleHealth()</code> 的正文中追加：</p><pre><code>const uint32_t elapsed = millis() - lastUploadAttemptMs;
+const uint32_t nextInMs = !uploadEnabled || elapsed &gt;= currentUploadDelayMs
+    ? 0
+    : currentUploadDelayMs - elapsed;
+
+body += "upload_enabled = " + String(uploadEnabled ? "yes" : "no") + "\n";
+body += "upload_successes = " + String(uploadSuccessCount) + "\n";
+body += "upload_failures = " + String(uploadFailureCount) + "\n";
+body += "upload_consecutive_failures = " + String(consecutiveUploadFailures) + "\n";
+body += "upload_last_status = " + String(lastUploadStatus) + "\n";
+body += "upload_next_in_ms = " + String(nextInMs) + "\n";</code></pre><p>把原来的 <code>body.reserve(96)</code> 增大为 <code>body.reserve(320)</code>。现在无需翻串口历史，也能从浏览器检查状态。</p>
+
+<h2>7. 给服务端加有限保留</h2><p>在 <code>server.py</code> 的 import 和常量区加入：</p><pre><code>import threading
+
+MAX_STORED_IMAGES = 120
+STORAGE_LOCK = threading.Lock()
+
+
+def prune_images_locked():
+    files = sorted(IMAGE_DIR.glob("*.jpg"))
+    expired = files[:-MAX_STORED_IMAGES]
+    for path in expired:
+        path.unlink(missing_ok=True)
+    return len(expired)
+
+
+def log_event(event, **fields):
+    record = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        **fields,
+    }
+    print(json.dumps(record, ensure_ascii=False, separators=(",", ":")), flush=True)</code></pre><p>写完临时文件后，先在锁内发布最终文件；保存失败返回 500：</p><pre><code>try:
+    with STORAGE_LOCK:
+        os.replace(temporary_path, final_path)
+except OSError as error:
+    temporary_path.unlink(missing_ok=True)
+    log_event("image_save_failed", error=str(error))
+    self.send_json(500, {"error": "save failed"})
+    return</code></pre><p>图片已经发布成功后再做裁剪。裁剪失败需要记录，但不能谎称刚才的保存失败：</p><pre><code>pruned = 0
+try:
+    with STORAGE_LOCK:
+        pruned = prune_images_locked()
+except OSError as error:
+    log_event("image_prune_failed", error=str(error))
+
+log_event(
+    "image_saved",
+    sequence=sequence,
+    filename=filename,
+    bytes=len(image),
+    pruned=pruned,
+)</code></pre><p>删除原来的普通 <code>print(f"image: ...")</code>。一个日志事件占一行 JSON，之后可以稳定地被程序解析。</p>
+
+<h2>8. 增加服务端状态接口</h2><p>在 <code>do_GET()</code> 处理 <code>/api/images</code> 之前加入：</p><pre><code>if path == "/api/status":
+    with STORAGE_LOCK:
+        files = list(IMAGE_DIR.glob("*.jpg"))
+        stored_bytes = sum(file.stat().st_size for file in files)
+    self.send_json(200, {
+        "stored_images": len(files),
+        "stored_bytes": stored_bytes,
+        "max_stored_images": MAX_STORED_IMAGES,
+    })
+    return</code></pre><p>把 <code>/api/images</code> 的列表读取改成：</p><pre><code>with STORAGE_LOCK:
+    files = sorted(IMAGE_DIR.glob("*.jpg"))[-MAX_LISTED_IMAGES:]
+    images = [
+        {"name": file.name, "url": f"/images/{file.name}"}
+        for file in files
+    ]</code></pre><p>在 <code>/images/...</code> 分支中也应在同一锁内完成 <code>is_file()</code> 和 <code>read_bytes()</code>，然后释放锁再调用 <code>send_bytes()</code>。这样裁剪线程不会恰好在检查与读取之间删除文件。</p>
+
+<h2>9. 故障注入矩阵</h2><table><tr><th>实验</th><th>操作</th><th>必须看到</th></tr><tr><td>正常</td><td>连续成功三次</td><td><code>status=201</code>，失败连续数归零，间隔回到 10 秒</td></tr><tr><td>服务不可达</td><td>停止 Python server</td><td>负数状态；下一间隔 20→40→60 秒，不忙循环</td></tr><tr><td>自动恢复</td><td>重新启动 server</td><td>下一次成功后退避复位为 10 秒</td></tr><tr><td>协议错误</td><td>临时把路径改成 <code>/wrong</code></td><td><code>404</code> 后自动上传关闭，不再重复请求</td></tr><tr><td>有限磁盘</td><td>临时把上限改为 5，上传至少 8 张</td><td>目录始终只有最新 5 张，日志出现 <code>pruned</code></td></tr></table>
+<pre><code>curl http://192.168.1.195/health
+curl http://127.0.0.1:8000/api/status | python3 -m json.tool</code></pre><p>完成保留实验后把服务端上限恢复为 120。</p>
+
+<h2>10. 回忆检查</h2><p>为什么网络错误适合指数退避，而 <code>404</code> 不应该无限重试？请在答案中使用“暂时故障”“协议错误”“资源上限”。</p><input id="answer" placeholder="用自己的话回答"><button id="check">检查答案</button><p id="feedback"></p>
+
+<h2>通过标准</h2><ul><li>成功、暂时失败、408/429 和确定的协议错误分别进入正确策略。</li><li>停服后退避增长，恢复后自动归零。</li><li><code>/health</code> 能解释当前上传状态和下一次等待。</li><li>服务端文件数有上限，结构化日志可逐行解析。</li><li>所有失败路径都归还摄像头帧，设备持续心跳且不会耗尽内存。</li></ul>
+<p class="muted">把退避增长/复位日志、一次 404 自动停用证据、设备 health 和服务端 status 发给我。完成后我们会做课程验收与学习记录总结；任何一步不清楚，随时问我。</p>
+<p><strong>主资料：</strong>Espressif 官方 <a href="https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/error-handling.html">错误处理指南</a>、FreeRTOS <a href="https://www.freertos.org/Documentation/02-Kernel/04-API-references/02-Task-control/01-vTaskDelay">任务延迟文档</a>与 Python <a href="https://docs.python.org/3/library/threading.html#lock-objects">Lock 文档</a>。</p>
+<script>const a=document.querySelector('#answer'),f=document.querySelector('#feedback');document.querySelector('#check').onclick=()=>{const t=a.value;if(!t.includes('暂时故障'))f.textContent='先说明网络或 5xx 为什么可能自行恢复。';else if(!t.includes('协议错误'))f.textContent='再说明 404 是否会因等待而改变。';else if(!t.includes('资源上限'))f.textContent='最后说明退避和保留策略保护了什么。';else f.textContent='分类正确。现在用故障注入矩阵证明状态机。'};</script>
+</main></body></html>

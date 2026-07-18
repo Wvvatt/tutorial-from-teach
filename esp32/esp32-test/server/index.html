@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>ESP32 时间相册</title>
+        <style>
+            body {
+                margin: 0;
+                background: #101516;
+                color: #edf4f2;
+                font:
+                    16px/1.5 system-ui,
+                    sans-serif;
+            }
+            main {
+                width: min(920px, 94vw);
+                margin: 28px auto;
+            }
+            img {
+                display: block;
+                width: 100%;
+                min-height: 240px;
+                object-fit: contain;
+                background: #050708;
+                border-radius: 8px;
+            }
+            .bar {
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                margin-top: 14px;
+            }
+            button {
+                padding: 8px 13px;
+                font: inherit;
+            }
+            #meta {
+                margin-left: auto;
+                color: #aab8b5;
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>ESP32 时间相册</h1>
+            <img id="photo" alt="尚无照片" />
+            <div class="bar">
+                <button id="prev">上一张</button>
+                <button id="toggle">暂停</button>
+                <button id="next">下一张</button>
+                <button id="delete">清空</button>
+                <span id="meta">等待照片…</span>
+            </div>
+        </main>
+        <script>
+            let images = [];
+            let index = 0;
+            let playing = true;
+
+            const photo = document.querySelector("#photo");
+            const meta = document.querySelector("#meta");
+            const deleteButton = document.querySelector("#delete");
+
+            function render() {
+                if (images.length === 0) {
+                    photo.removeAttribute("src");
+                    meta.textContent = "等待照片…";
+                    return;
+                }
+                const image = images[index];
+                photo.src = image.url;
+                meta.textContent = `${index + 1} / ${images.length} · ${image.name}`;
+            }
+
+            function move(step) {
+                if (images.length === 0) return;
+                index = (index + step + images.length) % images.length;
+                render();
+            }
+
+            async function refreshList() {
+                const currentName = images[index]?.name;
+                const response = await fetch("/api/images", {
+                    cache: "no-store",
+                });
+                const result = await response.json();
+                images = result.images;
+
+                const previousIndex = images.findIndex(
+                    (image) => image.name === currentName,
+                );
+                index = previousIndex >= 0 ? previousIndex : 0;
+                render();
+            }
+
+            async function deleteAllImages() {
+                deleteButton.disabled = true;
+                deleteButton.textContent = "清空中…";
+
+                try {
+                    const response = await fetch("/api/images", {
+                        method: "DELETE",
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw new Error(result.error || `HTTP ${response.status}`);
+                    }
+
+                    images = [];
+                    index = 0;
+                    render();
+                    meta.textContent = `已清空 ${result.deleted} 张照片`;
+                } catch (error) {
+                    meta.textContent = `清空失败：${error.message}`;
+                } finally {
+                    deleteButton.disabled = false;
+                    deleteButton.textContent = "清空";
+                }
+            }
+
+            document.querySelector("#prev").onclick = () => move(-1);
+            document.querySelector("#next").onclick = () => move(1);
+            document.querySelector("#toggle").onclick = (event) => {
+                playing = !playing;
+                event.target.textContent = playing ? "暂停" : "播放";
+            };
+            deleteButton.onclick = deleteAllImages;
+
+            setInterval(() => {
+                if (playing) move(1);
+            }, 1000);
+            setInterval(refreshList, 5000);
+            refreshList();
+        </script>
+    </body>
+</html>

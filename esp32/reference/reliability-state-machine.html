@@ -1,0 +1,21 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>上传可靠性状态机速查</title><style>:root{--ink:#18232c;--muted:#5b6873;--line:#dbe3e8;--accent:#126b66;--soft:#eef6f5;--code:#f2f4f6}*{box-sizing:border-box}body{margin:0;background:#fcfdfd;color:var(--ink);font:15px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:880px;margin:auto;padding:38px 22px 65px}h1{font-size:2rem;margin:0 0 5px}h2{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);font-size:1.2rem}pre{overflow:auto;background:var(--code);padding:12px 14px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.note{padding:12px 14px;background:var(--soft);border-left:4px solid var(--accent)}table{border-collapse:collapse;width:100%}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:left}a{color:var(--accent)}@media print{main{max-width:none;padding:0}}</style></head><body><main>
+<h1>上传可靠性状态机速查</h1><p>对应 <a href="../lessons/0013-reliability-and-diagnostics.html">第 13 课</a>。</p>
+<h2>结果到策略</h2><table><tr><th>结果</th><th>动作</th></tr><tr><td><code>201</code></td><td>成功；连续失败归零，恢复正常间隔</td></tr><tr><td>负数 / <code>5xx</code> / <code>408</code> / <code>429</code> / 抓拍失败</td><td>暂时故障；10→20→40→60 秒退避</td></tr><tr><td><code>404/413/415/422</code></td><td>协议错误；停止自动上传，等待修复</td></tr><tr><td>Wi‑Fi 未连接</td><td>不抓拍、不计失败；等待连接状态机</td></tr></table>
+<h2>有界资源</h2><pre><code>设备待上传帧：0 张（失败即丢弃并归还）
+单次连接超时：2 秒
+单次请求超时：5 秒
+最大重试间隔：60 秒
+服务端图片上限：120 张
+公开列表上限：60 张</code></pre><div class="note">边界必须体现在状态和代码中。“应该不会无限增长”不是可靠性保证。</div>
+<h2>最小可观测字段</h2><pre><code>upload_enabled
+upload_successes
+upload_failures
+upload_consecutive_failures
+upload_last_status
+upload_next_in_ms
+stored_images
+stored_bytes
+max_stored_images</code></pre>
+<h2>故障注入</h2><p>至少验证：服务停止、服务恢复、错误路径、磁盘保留上限。没有故障证据的重试代码，只是未经检验的愿望。</p>
+<p>主资料：Espressif 官方错误处理指南、FreeRTOS 任务延迟文档和 Python Lock 文档。</p>
+</main></body></html>
